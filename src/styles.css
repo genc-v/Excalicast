@@ -1,0 +1,185 @@
+/* Keep every layer transparent so the native transparent window shows the desktop
+   (live mode) or nothing but the Excalidraw canvas (frozen mode). */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+}
+
+.excali-root {
+  width: 100%;
+  height: 100%;
+}
+
+/* The overlay covers the whole display, so its top edge sits under the notch / menu bar.
+   Push Excalidraw's top toolbar row down so the tools + our buttons clear it. */
+.excali-root .excalidraw .App-menu_top {
+  margin-top: max(env(safe-area-inset-top, 0px), 32px);
+}
+
+/* Custom overlay controls rendered into Excalidraw's top-right UI slot. */
+.excali-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.excali-actions button {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--default-border-color, #d6d6d6);
+  background: var(--island-bg-color, #fff);
+  color: #1b1b1f;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.excali-actions button:hover {
+  background: #f1f0ff;
+}
+
+.excali-actions button.primary {
+  background: #6965db;
+  border-color: #6965db;
+  color: #fff;
+}
+
+.excali-actions button.primary:hover {
+  background: #5b57d1;
+}
+
+@media (prefers-color-scheme: dark) {
+  .excali-actions button {
+    background: #2b2b2f;
+    color: #e8e8ea;
+    border-color: #48484a;
+  }
+  .excali-actions button:hover {
+    background: #3a3a3f;
+  }
+  .excali-actions button.primary {
+    background: #6965db;
+    border-color: #6965db;
+    color: #fff;
+  }
+}
+
+/* Small toast for save/permission feedback. */
+.excali-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  background: rgba(27, 27, 31, 0.92);
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  max-width: 60vw;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Thin accent border shown while a live overlay is in draw mode. */
+.excali-drawmode-frame {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  pointer-events: none;
+  border: 2px solid #6965db;
+  border-radius: 2px;
+}
+
+/* New-whiteboard confirmation modal. */
+.excali-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.excali-modal {
+  background: #fff;
+  color: #1b1b1f;
+  width: 340px;
+  max-width: 80vw;
+  border-radius: 12px;
+  padding: 18px 18px 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  font-size: 14px;
+}
+
+.excali-modal-title {
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 6px;
+}
+
+.excali-modal-body {
+  color: #555;
+  margin-bottom: 12px;
+}
+
+.excali-modal-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #555;
+  margin-bottom: 14px;
+}
+
+.excali-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.excali-modal-actions button {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid #d6d6d6;
+  background: #fff;
+  color: #1b1b1f;
+  cursor: pointer;
+}
+
+.excali-modal-actions button.primary {
+  background: #6965db;
+  border-color: #6965db;
+  color: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+  .excali-modal {
+    background: #2c2c2e;
+    color: #f5f5f7;
+  }
+  .excali-modal-body,
+  .excali-modal-check {
+    color: #b0b0b5;
+  }
+  .excali-modal-actions button {
+    background: #3a3a3f;
+    color: #e8e8ea;
+    border-color: #48484a;
+  }
+  .excali-modal-actions button.primary {
+    background: #6965db;
+    border-color: #6965db;
+    color: #fff;
+  }
+}
