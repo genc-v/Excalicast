@@ -152,10 +152,13 @@ final class OverlayController: NSObject, WKScriptMessageHandlerWithReply {
             reply(nil, nil)
 
         case "copy_png_to_clipboard":
-            if let b64 = args["pngB64"] as? String, let data = Self.decodePNG(b64) {
+            if let b64 = args["pngB64"] as? String, let data = Self.decodePNG(b64),
+               let image = NSImage(data: data) {
                 let pb = NSPasteboard.general
                 pb.clearContents()
-                pb.setData(data, forType: .png)
+                // Writing the NSImage puts TIFF on the pasteboard; macOS auto-derives PNG/JPEG so
+                // ⌘V works everywhere on the first try.
+                pb.writeObjects([image])
                 reply(nil, nil)
             } else {
                 reply(nil, "no image data")

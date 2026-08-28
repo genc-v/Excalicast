@@ -14,11 +14,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             CGRequestScreenCaptureAccess()
         }
 
+        setupMainMenu()
         setupStatusItem()
         registerHotkeys()
 
         // Route trackpad pinch (magnify) events to the overlay for Excalidraw zoom.
         ExcaliApplication.onMagnify = { [weak overlay] event in overlay?.forwardPinch(event) }
+    }
+
+    /// A standard Edit menu so ⌘X/⌘C/⌘V reach the WebView as cut:/copy:/paste: — required for
+    /// pasting an image into the canvas with ⌘V (otherwise only right-click → Paste works).
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu()
+        appMenu.addItem(
+            withTitle: "Quit Excalicast",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        appItem.submenu = appMenu
+
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editItem.submenu = editMenu
+
+        NSApp.mainMenu = mainMenu
     }
 
     // MARK: - Status item
