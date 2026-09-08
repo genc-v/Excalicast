@@ -90,7 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // While a document is open, recenter it; otherwise reopen the last one worked on.
             if self.overlay.isShown {
                 self.overlay.emit("hotkey-recenter")
-            } else if let path = newestSavedPath() {
+            } else if let path = SavedDocuments.newestPath() {
                 self.overlay.openFile(path: path)
             }
         }

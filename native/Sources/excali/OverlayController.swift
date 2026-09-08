@@ -10,25 +10,18 @@ final class OverlayPanel: NSPanel {
 }
 
 /// Owns the overlay panel + WKWebView and services the JS bridge commands.
+///
+/// The WebView (which holds Excalidraw's heavy JS) is created lazily on the first action and torn
+/// down when the overlay is dismissed, so the idle app is just the native shell — no web memory.
 final class OverlayController: NSObject, WKScriptMessageHandlerWithReply {
     let panel: OverlayPanel
-    let webView: WKWebView
+    private var webView: WKWebView?
+    private var isReady = false // web has mounted + registered listeners
+    private var pendingEvent: String? // action to run once the web is ready
     private var pendingOpenPath: String?
 
     override init() {
         let frame = (NSScreen.main ?? NSScreen.screens[0]).frame
-
-        let config = WKWebViewConfiguration()
-        config.setURLSchemeHandler(WebSchemeHandler(), forURLScheme: "excalicast")
-        let ucc = WKUserContentController()
-        config.userContentController = ucc
-
-        webView = WKWebView(frame: CGRect(origin: .zero, size: frame.size), configuration: config)
-        webView.autoresizingMask = [.width, .height]
-        webView.setValue(false, forKey: "drawsBackground") // transparent webview
-        webView.allowsMagnification = false // we translate pinch into Excalidraw ctrl+wheel ourselves
-        if #available(macOS 12.0, *) { webView.underPageBackgroundColor = .clear }
-
         panel = OverlayPanel(
             contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -42,34 +35,59 @@ final class OverlayController: NSObject, WKScriptMessageHandlerWithReply {
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.contentView = webView
-        panel.initialFirstResponder = webView
-
         super.init()
+    }
 
+    // MARK: - Lazy WebView lifecycle
+
+    /// Create the WebView + load the app if it isn't alive yet.
+    private func ensureWebView() {
+        guard webView == nil else { return }
+        let config = WKWebViewConfiguration()
+        config.setURLSchemeHandler(WebSchemeHandler(), forURLScheme: "excalicast")
+        let ucc = WKUserContentController()
         ucc.addScriptMessageHandler(self, contentWorld: .page, name: "invoke")
-        applyAppearance()
-        webView.load(URLRequest(url: URL(string: "excalicast://app/index.html")!))
+        config.userContentController = ucc
+
+        let wv = WKWebView(frame: panel.frame, configuration: config)
+        wv.autoresizingMask = [.width, .height]
+        wv.setValue(false, forKey: "drawsBackground") // transparent
+        wv.allowsMagnification = false // pinch is translated into Excalidraw ctrl+wheel by us
+        if #available(macOS 12.0, *) { wv.underPageBackgroundColor = .clear }
+        wv.appearance = NSAppearance(named: .aqua)
+
+        webView = wv
+        isReady = false
+        panel.contentView = wv
+        panel.initialFirstResponder = wv
+        wv.load(URLRequest(url: URL(string: "excalicast://app/index.html")!))
+    }
+
+    /// Destroy the WebView to release all web memory while idle.
+    private func teardownWebView() {
+        panel.orderOut(nil)
+        if let wv = webView {
+            wv.stopLoading()
+            wv.configuration.userContentController.removeScriptMessageHandler(
+                forName: "invoke", contentWorld: .page
+            )
+            wv.removeFromSuperview()
+        }
+        panel.contentView = nil
+        webView = nil
+        isReady = false
+        pendingEvent = nil
     }
 
     /// Translate a trackpad magnify event into a ctrl+wheel zoom at the cursor for Excalidraw.
     func forwardPinch(_ event: NSEvent) {
-        guard panel.isVisible else { return }
+        guard let webView, panel.isVisible else { return }
         let viewPoint = webView.convert(event.locationInWindow, from: nil)
         let x = viewPoint.x
         let y = webView.bounds.height - viewPoint.y // NSView is bottom-left; CSS is top-left
         let wheelDelta = -event.magnification * 400.0
         let js = "window.__excaliPinch && window.__excaliPinch(\(x), \(y), \(wheelDelta))"
         webView.evaluateJavaScript(js, completionHandler: nil)
-    }
-
-    /// The overlay is always light: Excalidraw's dark theme would invert the screenshot on WebKit
-    /// (no canvas-filter support to counter-invert images). The appearance setting themes the
-    /// native UI (Settings window) via `NSApp.appearance` instead.
-    func applyAppearance() {
-        let light = NSAppearance(named: .aqua)
-        webView.appearance = light
-        panel.appearance = light
     }
 
     /// Whether the system is in dark mode (the overlay's canvas colors follow the system).
@@ -87,9 +105,20 @@ final class OverlayController: NSObject, WKScriptMessageHandlerWithReply {
 
     // MARK: - Native -> JS
 
+    // Events that should spin up the WebView when the overlay is closed (user opening a document).
+    private static let openEvents: Set<String> = ["hotkey-frozen", "hotkey-whiteboard", "open-file"]
+
+    /// Dispatch an action to the web. If the WebView isn't alive/ready yet, spin it up for an
+    /// open-event and run the action once it signals `web_ready`; otherwise drop it (e.g. a
+    /// settings change while the overlay is closed is a no-op).
     func emit(_ event: String) {
-        let js = "window.__excaliEmit && window.__excaliEmit('\(event)')"
-        DispatchQueue.main.async { self.webView.evaluateJavaScript(js, completionHandler: nil) }
+        if let webView, isReady {
+            let js = "window.__excaliEmit && window.__excaliEmit('\(event)')"
+            DispatchQueue.main.async { webView.evaluateJavaScript(js, completionHandler: nil) }
+        } else if Self.openEvents.contains(event) {
+            pendingEvent = event
+            ensureWebView()
+        }
     }
 
     // MARK: - JS -> Native (WKScriptMessageHandlerWithReply)
@@ -109,6 +138,18 @@ final class OverlayController: NSObject, WKScriptMessageHandlerWithReply {
 
     private func handle(cmd: String, args: [String: Any], reply: @escaping (Any?, String?) -> Void) {
         switch cmd {
+        case "web_ready":
+            isReady = true
+            if let ev = pendingEvent {
+                pendingEvent = nil
+                emit(ev)
+            }
+            reply(nil, nil)
+
+        case "release_overlay":
+            teardownWebView()
+            reply(nil, nil)
+
         case "check_screen_permission":
             reply(CGPreflightScreenCaptureAccess(), nil)
 
@@ -193,7 +234,7 @@ final class OverlayController: NSObject, WKScriptMessageHandlerWithReply {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
-        panel.makeFirstResponder(webView)
+        if let webView { panel.makeFirstResponder(webView) }
         // Activate so macOS delivers trackpad magnify (pinch) gestures — those only reach the
         // active app. The panel is non-activating and joins the current Space, so this shouldn't
         // switch Spaces away from a fullscreen app.
@@ -230,7 +271,7 @@ final class OverlayController: NSObject, WKScriptMessageHandlerWithReply {
         if let data = Self.decodePNG(pngB64) {
             try? data.write(to: png)
         }
-        pruneSavedFiles()
+        SavedDocuments.prune()
         return path
     }
 
@@ -245,7 +286,7 @@ final class OverlayController: NSObject, WKScriptMessageHandlerWithReply {
         if !excalidraw.isEmpty {
             try? excalidraw.write(toFile: base + ".excalidraw", atomically: true, encoding: .utf8)
         }
-        pruneSavedFiles()
+        SavedDocuments.prune()
         return base + ".excalidraw"
     }
 }
