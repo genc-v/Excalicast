@@ -14,7 +14,15 @@ enum CanvasRenderer {
             ctx.setFillColor(red: bg.r, green: bg.g, blue: bg.b, alpha: bg.a)
             ctx.fill(ctx.boundingBoxOfClipPath)
         }
-        for el in scene.elements {
+        // Bound labels (text attached to a line/arrow) render last so no other line crosses them.
+        func isBoundLabel(_ el: Element) -> Bool { el.kind == .text && el.containerId != nil }
+        for el in scene.elements where !isBoundLabel(el) {
+            ctx.saveGState()
+            ctx.setAlpha(el.opacity / 100)
+            drawElement(el, in: ctx, scene: scene, images: images, backingScale: backingScale)
+            ctx.restoreGState()
+        }
+        for el in scene.elements where isBoundLabel(el) {
             ctx.saveGState()
             ctx.setAlpha(el.opacity / 100)
             drawElement(el, in: ctx, scene: scene, images: images, backingScale: backingScale)
@@ -148,11 +156,13 @@ enum CanvasRenderer {
         // run through the text.
         if let cid = el.containerId, let container = scene.element(id: cid), container.isLinear,
            let bg = Element.rgba(scene.backgroundColor) {
-            let pad: CGFloat = 4 * scene.zoom
+            let pad: CGFloat = 5 * scene.zoom
             let rect = CGRect(x: origin.x - pad, y: origin.y - pad,
                               width: size.width + pad * 2, height: size.height + pad * 2)
+            let r = min(6 * scene.zoom, rect.height / 2)
             ctx.setFillColor(red: bg.r, green: bg.g, blue: bg.b, alpha: bg.a)
-            ctx.fill(rect)
+            ctx.addPath(CGPath(roundedRect: rect, cornerWidth: r, cornerHeight: r, transform: nil))
+            ctx.fillPath()
         }
 
         ctx.saveGState()
