@@ -26,6 +26,31 @@ struct CaptureResult {
 }
 
 enum Capture {
+    // ScreenCaptureKit's first `SCShareableContent` fetch is slow (framework init + window
+    // enumeration). We warm it at launch and reuse the cached display list so ⌘⇧A opens fast; each
+    // use kicks a background refresh for the next time.
+    private static var cachedContent: SCShareableContent?
+
+    /// Warm ScreenCaptureKit at launch so the first capture isn't slow.
+    static func prewarm() {
+        Task { cachedContent = try? await fetchContent() }
+    }
+
+    private static func fetchContent() async throws -> SCShareableContent {
+        try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+    }
+
+    /// Cached shareable content when available (refreshing in the background), else a fresh fetch.
+    private static func shareableContent() async throws -> SCShareableContent {
+        if let c = cachedContent {
+            Task { cachedContent = try? await fetchContent() }
+            return c
+        }
+        let c = try await fetchContent()
+        cachedContent = c
+        return c
+    }
+
     /// The NSScreen under the mouse cursor (falls back to main).
     static func screenUnderCursor() -> NSScreen {
         let mouse = NSEvent.mouseLocation
@@ -47,9 +72,7 @@ enum Capture {
         let pxW = Int((logicalW * scale).rounded())
         let pxH = Int((logicalH * scale).rounded())
 
-        let content = try await SCShareableContent.excludingDesktopWindows(
-            false, onScreenWindowsOnly: false
-        )
+        let content = try await shareableContent()
         let targetID = displayID(of: screen)
         guard let display = content.displays.first(where: { $0.displayID == targetID })
             ?? content.displays.first

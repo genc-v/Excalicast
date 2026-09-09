@@ -88,8 +88,8 @@ final class OverlayController: NSObject {
         NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
 
-    /// No-op for the native canvas (nothing to pre-warm), kept so AppDelegate's call still compiles.
-    func prewarm() {}
+    /// Warm ScreenCaptureKit at launch so the first ⌘⇧A capture is fast.
+    func prewarm() { Capture.prewarm() }
 
     /// Route the small set of hotkey/menu events to native actions.
     func emit(_ event: String) {
@@ -245,14 +245,12 @@ final class OverlayController: NSObject {
 
     private func hasUserContent() -> Bool { canvas.scene.elements.contains { !$0.locked } }
 
-    /// Write the document. The `.excalidraw` (vector, cheap — screenshot dataURL is cached, not
-    /// re-encoded) is always written; the `.png` (gallery thumbnail / shared image) only when asked.
+    /// Write the document off the main thread so opening/switching never blocks on a full-res PNG
+    /// export. The `.excalidraw` (vector, cheap — cached screenshot dataURL) always writes; the
+    /// `.png` (gallery thumbnail / shared image) only when asked.
     private func saveDocument(includePNG: Bool) {
         saveTimer?.invalidate()
-        guard mode != .idle, hasUserContent(),
-              let doc = ExcalidrawIO.fileData(canvas.scene, images: canvas.images,
-                                              dataURLs: canvas.imageDataURLs)
-        else { return }
+        guard mode != .idle, hasUserContent() else { return }
 
         let base: String
         if let path = currentPath {
@@ -263,11 +261,19 @@ final class OverlayController: NSObject {
             base = "\(dir)/Annotation-\(ts)"
             currentPath = base + ".excalidraw"
         }
-        try? doc.write(to: URL(fileURLWithPath: base + ".excalidraw"))
-        if includePNG, let png = ExcalidrawIO.exportPNG(canvas.scene, images: canvas.images) {
-            try? png.write(to: URL(fileURLWithPath: base + ".png"))
+        // Snapshot value types so the background write is race-free even if the scene is cleared next.
+        let scene = canvas.scene
+        let images = canvas.images
+        let dataURLs = canvas.imageDataURLs
+        DispatchQueue.global(qos: .utility).async {
+            if let doc = ExcalidrawIO.fileData(scene, images: images, dataURLs: dataURLs) {
+                try? doc.write(to: URL(fileURLWithPath: base + ".excalidraw"))
+            }
+            if includePNG, let png = ExcalidrawIO.exportPNG(scene, images: images) {
+                try? png.write(to: URL(fileURLWithPath: base + ".png"))
+            }
+            SavedDocuments.prune()
         }
-        SavedDocuments.prune()
     }
 
     // MARK: - Window placement
