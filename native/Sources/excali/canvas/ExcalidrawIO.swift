@@ -99,7 +99,8 @@ enum ExcalidrawIO {
 
     private static func bindingDict(_ b: Binding?) -> Any {
         guard let b = b else { return NSNull() }
-        return ["elementId": b.elementId, "focus": b.focus, "gap": b.gap]
+        return ["elementId": b.elementId, "focus": b.focus, "gap": b.gap,
+                "anchorX": b.anchorX, "anchorY": b.anchorY]
     }
 
     // MARK: - Read
@@ -162,7 +163,9 @@ enum ExcalidrawIO {
         guard let d = v as? [String: Any], let id = d["elementId"] as? String else { return nil }
         let focus = (d["focus"] as? NSNumber).map { Double(truncating: $0) } ?? 0
         let gap = (d["gap"] as? NSNumber).map { Double(truncating: $0) } ?? 8
-        return Binding(elementId: id, focus: focus, gap: gap)
+        let ax = (d["anchorX"] as? NSNumber).map { Double(truncating: $0) } ?? 0
+        let ay = (d["anchorY"] as? NSNumber).map { Double(truncating: $0) } ?? 0
+        return Binding(elementId: id, focus: focus, gap: gap, anchorX: ax, anchorY: ay)
     }
 
     // MARK: - PNG

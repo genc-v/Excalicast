@@ -13,6 +13,10 @@ struct Binding: Equatable {
     var elementId: String
     var focus: Double = 0
     var gap: Double = 8
+    // Where the arrow attached, normalized to the shape's half-extents (−1…1). Lets several arrows
+    // connect to one shape at distinct points instead of all collapsing to the center.
+    var anchorX: Double = 0
+    var anchorY: Double = 0
 }
 
 /// A single drawable element. One value type covers every kind; unused fields stay at their

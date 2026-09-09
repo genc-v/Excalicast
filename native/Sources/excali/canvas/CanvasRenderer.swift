@@ -139,12 +139,24 @@ enum CanvasRenderer {
         guard !el.text.isEmpty else { return }
         let origin = scene.toScreen(CGPoint(x: el.x, y: el.y))
         let attr = attributedString(el, scale: scene.zoom)
-        ctx.saveGState()
-        // Core Text renders bottom-up; flip so text reads correctly in the y-flipped view.
         let framesetter = CTFramesetterCreateWithAttributedString(attr)
         let size = CTFramesetterSuggestFrameSizeWithConstraints(
             framesetter, CFRange(location: 0, length: 0), nil,
             CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude), nil)
+
+        // A label bound to a line/arrow gets a background swatch (canvas color) so the line doesn't
+        // run through the text.
+        if let cid = el.containerId, let container = scene.element(id: cid), container.isLinear,
+           let bg = Element.rgba(scene.backgroundColor) {
+            let pad: CGFloat = 4 * scene.zoom
+            let rect = CGRect(x: origin.x - pad, y: origin.y - pad,
+                              width: size.width + pad * 2, height: size.height + pad * 2)
+            ctx.setFillColor(red: bg.r, green: bg.g, blue: bg.b, alpha: bg.a)
+            ctx.fill(rect)
+        }
+
+        ctx.saveGState()
+        // Core Text renders bottom-up; flip so text reads correctly in the y-flipped view.
         ctx.translateBy(x: origin.x, y: origin.y + size.height)
         ctx.scaleBy(x: 1, y: -1)
         let path = CGPath(rect: CGRect(origin: .zero, size: size), transform: nil)

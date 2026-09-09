@@ -24,11 +24,13 @@ enum ArrowBinding {
         let endWorld = CGPoint(x: arrow.x + arrow.points[last].x, y: arrow.y + arrow.points[last].y)
 
         if let s = shape(at: startWorld, in: scene, excluding: arrow.id) {
-            scene.elements[i].startBinding = Binding(elementId: s.id, gap: 8)
+            let (ax, ay) = anchor(of: s, at: startWorld)
+            scene.elements[i].startBinding = Binding(elementId: s.id, gap: 8, anchorX: ax, anchorY: ay)
             addBound(&scene, shapeId: s.id, arrowId: arrow.id)
         }
         if let e = shape(at: endWorld, in: scene, excluding: arrow.id) {
-            scene.elements[i].endBinding = Binding(elementId: e.id, gap: 8)
+            let (ax, ay) = anchor(of: e, at: endWorld)
+            scene.elements[i].endBinding = Binding(elementId: e.id, gap: 8, anchorX: ax, anchorY: ay)
             addBound(&scene, shapeId: e.id, arrowId: arrow.id)
         }
         recompute(&scene, arrowIndex: i)
@@ -58,10 +60,10 @@ enum ArrowBinding {
         let last = world.count - 1
 
         if let b = arrow.startBinding, let shape = scene.element(id: b.elementId) {
-            world[0] = HitTest.boundaryPoint(of: shape, toward: world[1], gap: b.gap)
+            world[0] = HitTest.boundaryPoint(of: shape, toward: aim(shape, b, fallback: world[1]), gap: b.gap)
         }
         if let b = arrow.endBinding, let shape = scene.element(id: b.elementId) {
-            world[last] = HitTest.boundaryPoint(of: shape, toward: world[last - 1], gap: b.gap)
+            world[last] = HitTest.boundaryPoint(of: shape, toward: aim(shape, b, fallback: world[last - 1]), gap: b.gap)
         }
         // Re-anchor origin at the first point; points become relative.
         let origin = world[0]
@@ -87,6 +89,23 @@ enum ArrowBinding {
     }
 
     // MARK: - Helpers
+
+    /// Normalized drop position within a shape (−1…1 across its half-extents), clamped.
+    private static func anchor(of shape: Element, at p: CGPoint) -> (Double, Double) {
+        let hw = max(shape.bounds.width / 2, 1), hh = max(shape.bounds.height / 2, 1)
+        let nx = Double((p.x - shape.center.x) / hw)
+        let ny = Double((p.y - shape.center.y) / hh)
+        return (max(-1, min(1, nx)), max(-1, min(1, ny)))
+    }
+
+    /// The world point a bound endpoint should aim at: the stored anchor direction if meaningful,
+    /// else fall back to the arrow's other endpoint (center-ish drops behave as before).
+    private static func aim(_ shape: Element, _ b: Binding, fallback: CGPoint) -> CGPoint {
+        if hypot(b.anchorX, b.anchorY) < 0.15 { return fallback }
+        let hw = shape.bounds.width / 2, hh = shape.bounds.height / 2
+        return CGPoint(x: shape.center.x + CGFloat(b.anchorX) * hw,
+                       y: shape.center.y + CGFloat(b.anchorY) * hh)
+    }
 
     private static func shape(at p: CGPoint, in scene: Scene, excluding id: String) -> Element? {
         for el in scene.elements.reversed() where el.id != id && isBindable(el) {
