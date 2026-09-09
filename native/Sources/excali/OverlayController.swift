@@ -194,6 +194,7 @@ final class OverlayController: NSObject {
         canvas.imageDataURLs.removeAll()
         canvas.selection.removeAll()
         panel.orderOut(nil)
+        Memory.releaseFreeMemory() // hand freed screenshot/export pages back to the OS
     }
 
     private func handleToolbarAction(_ name: String) {

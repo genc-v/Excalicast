@@ -73,6 +73,7 @@ final class GalleryController: NSObject, NSWindowDelegate {
         panel?.orderOut(nil)
         // Drop the decoded preview/thumbnail bitmaps — the gallery is gone, so don't hold them.
         ThumbnailCache.clear()
+        Memory.releaseFreeMemory() // return the freed thumbnail pages to the OS
     }
 
     func windowDidResignKey(_ notification: Notification) { close() }
