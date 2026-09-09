@@ -1,24 +1,26 @@
 import AppKit
 import CoreGraphics
-import WebKit
 
-/// A borderless, non-activating panel that can still become key (for Excalidraw's keyboard
+/// A borderless, non-activating panel that can still become key (for the canvas's keyboard
 /// shortcuts) and join other apps' fullscreen Spaces without switching Spaces.
 final class OverlayPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
 
-/// Owns the overlay panel + WKWebView and services the JS bridge commands.
-///
-/// The WebView (which holds Excalidraw's heavy JS) is created lazily on the first action and torn
-/// down when the overlay is dismissed, so the idle app is just the native shell — no web memory.
-final class OverlayController: NSObject, WKScriptMessageHandlerWithReply {
+/// Owns the overlay panel + the native `CanvasView` (which replaced the WKWebView). Handles the
+/// annotate / whiteboard / open-file modes, autosave, export, and hotkey actions directly — no JS
+/// bridge. The idle app is just the native shell + a tiny empty canvas view.
+final class OverlayController: NSObject {
+    enum Mode { case idle, frozen, whiteboard, file }
+
     let panel: OverlayPanel
-    private var webView: WKWebView?
-    private var isReady = false // web has mounted + registered listeners
-    private var pendingEvent: String? // action to run once the web is ready
-    private var pendingOpenPath: String?
+    private let canvas = CanvasView(frame: .zero)
+    private let toolbar = ToolbarView()
+
+    private var mode: Mode = .idle
+    private var currentPath: String?
+    private var saveTimer: Timer?
 
     override init() {
         let frame = (NSScreen.main ?? NSScreen.screens[0]).frame
@@ -36,257 +38,234 @@ final class OverlayController: NSObject, WKScriptMessageHandlerWithReply {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         super.init()
+        setupCanvas(frame: frame)
     }
 
-    // MARK: - Lazy WebView lifecycle
+    private func setupCanvas(frame: NSRect) {
+        canvas.frame = NSRect(origin: .zero, size: frame.size)
+        canvas.autoresizingMask = [.width, .height]
+        canvas.onChange = { [weak self] in self?.scheduleAutosave() }
+        canvas.onDismiss = { [weak self] in self?.dismiss() }
+        canvas.onToolChange = { [weak self] tool in self?.toolbar.highlight(tool) }
 
-    /// Create the WebView + load the app if it isn't alive yet.
-    private func ensureWebView() {
-        guard webView == nil else { return }
-        let config = WKWebViewConfiguration()
-        config.setURLSchemeHandler(WebSchemeHandler(), forURLScheme: "excalicast")
-        let ucc = WKUserContentController()
-        ucc.addScriptMessageHandler(self, contentWorld: .page, name: "invoke")
-        config.userContentController = ucc
+        let container = NSView(frame: canvas.bounds)
+        container.autoresizingMask = [.width, .height]
+        container.addSubview(canvas)
 
-        let wv = WKWebView(frame: panel.frame, configuration: config)
-        wv.autoresizingMask = [.width, .height]
-        wv.setValue(false, forKey: "drawsBackground") // transparent
-        wv.allowsMagnification = false // pinch is translated into Excalidraw ctrl+wheel by us
-        if #available(macOS 12.0, *) { wv.underPageBackgroundColor = .clear }
-        wv.appearance = NSAppearance(named: .aqua)
+        toolbar.translatesAutoresizingMaskIntoConstraints = false
+        toolbar.onTool = { [weak self] tool in self?.canvas.tool = tool }
+        toolbar.onAction = { [weak self] name in self?.handleToolbarAction(name) }
+        container.addSubview(toolbar)
+        NSLayoutConstraint.activate([
+            toolbar.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            toolbar.topAnchor.constraint(equalTo: container.topAnchor, constant: 14),
+        ])
 
-        webView = wv
-        isReady = false
-        panel.contentView = wv
-        panel.initialFirstResponder = wv
-        wv.load(URLRequest(url: URL(string: "excalicast://app/index.html")!))
+        panel.contentView = container
+        panel.initialFirstResponder = canvas
     }
 
-    /// Destroy the WebView to release all web memory while idle.
-    private func teardownWebView() {
-        panel.orderOut(nil)
-        if let wv = webView {
-            wv.stopLoading()
-            wv.configuration.userContentController.removeScriptMessageHandler(
-                forName: "invoke", contentWorld: .page
-            )
-            wv.removeFromSuperview()
-        }
-        panel.contentView = nil
-        webView = nil
-        isReady = false
-        pendingEvent = nil
-    }
+    // MARK: - AppDelegate-facing API (kept stable so hotkey wiring barely changed)
 
-    /// Translate a trackpad magnify event into a ctrl+wheel zoom at the cursor for Excalidraw.
-    func forwardPinch(_ event: NSEvent) {
-        guard let webView, panel.isVisible else { return }
-        let viewPoint = webView.convert(event.locationInWindow, from: nil)
-        let x = viewPoint.x
-        let y = webView.bounds.height - viewPoint.y // NSView is bottom-left; CSS is top-left
-        let wheelDelta = -event.magnification * 400.0
-        let js = "window.__excaliPinch && window.__excaliPinch(\(x), \(y), \(wheelDelta))"
-        webView.evaluateJavaScript(js, completionHandler: nil)
-    }
+    var isShown: Bool { panel.isVisible }
 
-    /// Whether the system is in dark mode (the overlay's canvas colors follow the system).
     func isDarkEffective() -> Bool {
         NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
 
-    var isShown: Bool { panel.isVisible }
+    /// No-op for the native canvas (nothing to pre-warm), kept so AppDelegate's call still compiles.
+    func prewarm() {}
 
-    /// Open a saved `.excalidraw` file for continued editing.
-    func openFile(path: String) {
-        pendingOpenPath = path
-        emit("open-file")
-    }
-
-    // MARK: - Native -> JS
-
-    // Events that should spin up the WebView when the overlay is closed (user opening a document).
-    private static let openEvents: Set<String> = ["hotkey-frozen", "hotkey-whiteboard", "open-file"]
-
-    /// Dispatch an action to the web. If the WebView isn't alive/ready yet, spin it up for an
-    /// open-event and run the action once it signals `web_ready`; otherwise drop it (e.g. a
-    /// settings change while the overlay is closed is a no-op).
+    /// Route the small set of hotkey/menu events to native actions.
     func emit(_ event: String) {
-        if let webView, isReady {
-            let js = "window.__excaliEmit && window.__excaliEmit('\(event)')"
-            DispatchQueue.main.async { webView.evaluateJavaScript(js, completionHandler: nil) }
-        } else if Self.openEvents.contains(event) {
-            pendingEvent = event
-            ensureWebView()
+        switch event {
+        case "hotkey-frozen": startFrozen()
+        case "hotkey-whiteboard": startWhiteboard()
+        case "hotkey-recenter": canvas.recenter()
+        case "hotkey-dismiss": dismiss()
+        case "settings-changed": applySettings()
+        default: break
         }
     }
 
-    // MARK: - JS -> Native (WKScriptMessageHandlerWithReply)
-
-    func userContentController(
-        _ userContentController: WKUserContentController,
-        didReceive message: WKScriptMessage,
-        replyHandler: @escaping (Any?, String?) -> Void
-    ) {
-        guard let body = message.body as? [String: Any], let cmd = body["cmd"] as? String else {
-            replyHandler(nil, "malformed bridge message")
-            return
-        }
-        let args = body["args"] as? [String: Any] ?? [:]
-        handle(cmd: cmd, args: args, reply: replyHandler)
+    func openFile(path: String) {
+        autosaveNow()
+        guard let data = FileManager.default.contents(atPath: path) else { return }
+        let parsed = ExcalidrawIO.parse(data)
+        canvas.images = parsed.images
+        applyTheme()
+        canvas.scene.elements = parsed.elements
+        canvas.selection.removeAll()
+        canvas.history.clear()
+        currentPath = path
+        mode = .file
+        showOverlay(forScreenUnderCursor: true)
+        canvas.recenter()
     }
 
-    private func handle(cmd: String, args: [String: Any], reply: @escaping (Any?, String?) -> Void) {
-        switch cmd {
-        case "web_ready":
-            isReady = true
-            if let ev = pendingEvent {
-                pendingEvent = nil
-                emit(ev)
-            }
-            reply(nil, nil)
+    /// Translate a trackpad magnify into a zoom around the cursor.
+    func forwardPinch(_ event: NSEvent) {
+        guard panel.isVisible else { return }
+        let p = canvas.convert(event.locationInWindow, from: nil)
+        canvas.zoom(by: 1 + event.magnification, at: p)
+    }
 
-        case "release_overlay":
-            teardownWebView()
-            reply(nil, nil)
+    // MARK: - Modes
 
-        case "check_screen_permission":
-            reply(CGPreflightScreenCaptureAccess(), nil)
+    private func startWhiteboard() {
+        if mode == .whiteboard { dismiss(); return }
+        autosaveNow()
+        loadBlank()
+        mode = .whiteboard
+        showOverlay(forScreenUnderCursor: true)
+    }
 
-        case "request_screen_permission":
-            reply(CGRequestScreenCaptureAccess(), nil)
+    private func startFrozen() {
+        if mode == .frozen { dismiss(); return }
+        autosaveNow()
 
-        case "open_screen_recording_settings":
+        if !CGPreflightScreenCaptureAccess() {
+            CGRequestScreenCaptureAccess()
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
                 NSWorkspace.shared.open(url)
             }
-            reply(nil, nil)
-
-        case "get_settings":
-            reply([
-                "dark": isDarkEffective(),
-                "gridEnabled": SettingsStore.gridEnabled,
-            ], nil)
-
-        case "get_pending_file":
-            if let p = pendingOpenPath,
-               let content = try? String(contentsOfFile: p, encoding: .utf8) {
-                reply(["path": p, "content": content], nil)
-            } else {
-                reply(nil, nil)
-            }
-
-        case "save_to_file":
-            let path = args["path"] as? String ?? ""
-            let b64 = args["pngB64"] as? String ?? ""
-            let excalidraw = args["excalidraw"] as? String ?? ""
-            reply(saveToFile(path: path, pngB64: b64, excalidraw: excalidraw), nil)
-
-        case "hide_overlay":
-            panel.orderOut(nil)
-            reply(nil, nil)
-
-        case "show_overlay":
-            let w = args["widthPx"] as? Int
-            let h = args["heightPx"] as? Int
-            showOverlay(widthPx: w, heightPx: h)
-            reply(nil, nil)
-
-        case "copy_png_to_clipboard":
-            if let b64 = args["pngB64"] as? String, let data = Self.decodePNG(b64),
-               let image = NSImage(data: data) {
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                // Writing the NSImage puts TIFF on the pasteboard; macOS auto-derives PNG/JPEG so
-                // ⌘V works everywhere on the first try.
-                pb.writeObjects([image])
-                reply(nil, nil)
-            } else {
-                reply(nil, "no image data")
-            }
-
-        case "save_annotation":
-            let b64 = args["pngB64"] as? String ?? ""
-            let excalidraw = args["excalidraw"] as? String ?? ""
-            reply(saveAnnotation(pngB64: b64, excalidraw: excalidraw), nil)
-
-        case "capture_screen":
-            Task {
-                do {
-                    let result = try await Capture.captureUnderCursor()
-                    await MainActor.run { reply(result.dict, nil) }
-                } catch {
-                    await MainActor.run { reply(nil, error.localizedDescription) }
-                }
-            }
-
-        default:
-            reply(nil, "unknown command: \(cmd)")
+            return
         }
+
+        Task { @MainActor in
+            guard let cap = try? await Capture.captureUnderCursor(),
+                  let img = ExcalidrawIO.decodeDataURL(cap.dataUrl) else { return }
+            loadBlank()
+            let fileId = "snapshot-\(img.width)x\(img.height)"
+            canvas.images[fileId] = img
+            var bg = Element(kind: .image)
+            bg.x = 0; bg.y = 0; bg.width = cap.logicalW; bg.height = cap.logicalH
+            bg.locked = true; bg.fileId = fileId
+            canvas.scene.elements = [bg]
+            mode = .frozen
+            showOverlay(widthPx: cap.widthPx, heightPx: cap.heightPx)
+            canvas.recenter()
+        }
+    }
+
+    private func loadBlank() {
+        applyTheme()
+        canvas.scene.elements = []
+        canvas.scene.scrollX = 0; canvas.scene.scrollY = 0; canvas.scene.zoom = 1
+        canvas.selection.removeAll()
+        canvas.history.clear()
+        canvas.commitTextEditing()
+        currentPath = nil
+        canvas.needsDisplay = true
+    }
+
+    private func dismiss() {
+        canvas.commitTextEditing()
+        autosaveNow()
+        saveTimer?.invalidate()
+        mode = .idle
+        currentPath = nil
+        canvas.scene.elements = []
+        canvas.images.removeAll()
+        canvas.selection.removeAll()
+        panel.orderOut(nil)
+    }
+
+    private func handleToolbarAction(_ name: String) {
+        switch name {
+        case "new": startWhiteboard()
+        case "recenter": canvas.recenter()
+        case "copy": copyToClipboard()
+        case "save": saveNow()
+        case "close": dismiss()
+        default: break
+        }
+    }
+
+    private func copyToClipboard() {
+        canvas.commitTextEditing()
+        guard let png = ExcalidrawIO.exportPNG(canvas.scene, images: canvas.images),
+              let image = NSImage(data: png) else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.writeObjects([image])
+        dismiss()
+    }
+
+    private func saveNow() {
+        canvas.commitTextEditing()
+        autosaveNow()
+    }
+
+    // MARK: - Theme / settings
+
+    private func applyTheme() {
+        let dark = isDarkEffective()
+        canvas.scene.backgroundColor = dark ? "#121212" : "#ffffff"
+        canvas.scene.gridEnabled = SettingsStore.gridEnabled
+        canvas.strokeColor = dark ? "#ffffff" : "#1e1e1e"
+    }
+
+    private func applySettings() {
+        guard mode != .idle else { return }
+        canvas.scene.gridEnabled = SettingsStore.gridEnabled
+        canvas.needsDisplay = true
+    }
+
+    // MARK: - Autosave
+
+    private func scheduleAutosave() {
+        saveTimer?.invalidate()
+        saveTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { [weak self] _ in
+            self?.autosaveNow()
+        }
+    }
+
+    private func hasUserContent() -> Bool { canvas.scene.elements.contains { !$0.locked } }
+
+    private func autosaveNow() {
+        saveTimer?.invalidate()
+        guard mode != .idle, hasUserContent(),
+              let doc = ExcalidrawIO.fileData(canvas.scene, images: canvas.images),
+              let png = ExcalidrawIO.exportPNG(canvas.scene, images: canvas.images)
+        else { return }
+
+        let base: String
+        if let path = currentPath {
+            base = (path as NSString).deletingPathExtension
+        } else {
+            let dir = SettingsStore.resolvedSaveDir()
+            let ts = Int(Date().timeIntervalSince1970 * 1000)
+            base = "\(dir)/Annotation-\(ts)"
+            currentPath = base + ".excalidraw"
+        }
+        try? doc.write(to: URL(fileURLWithPath: base + ".excalidraw"))
+        try? png.write(to: URL(fileURLWithPath: base + ".png"))
+        SavedDocuments.prune()
     }
 
     // MARK: - Window placement
 
-    func showOverlay(widthPx: Int?, heightPx: Int?) {
-        let screen = pickScreen(widthPx: widthPx, heightPx: heightPx)
+    private func showOverlay(forScreenUnderCursor: Bool) {
+        showOverlay(screen: Capture.screenUnderCursor())
+    }
+
+    private func showOverlay(widthPx: Int, heightPx: Int) {
+        let matches = NSScreen.screens.filter {
+            Int(($0.frame.width * $0.backingScaleFactor).rounded()) == widthPx
+                && Int(($0.frame.height * $0.backingScaleFactor).rounded()) == heightPx
+        }
+        showOverlay(screen: matches.count == 1 ? matches[0] : Capture.screenUnderCursor())
+    }
+
+    private func showOverlay(screen: NSScreen) {
         panel.setFrame(screen.frame, display: true)
         panel.level = .screenSaver
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
-        if let webView { panel.makeFirstResponder(webView) }
-        // Activate so macOS delivers trackpad magnify (pinch) gestures — those only reach the
-        // active app. The panel is non-activating and joins the current Space, so this shouldn't
-        // switch Spaces away from a fullscreen app.
+        panel.makeFirstResponder(canvas)
         NSApp.activate(ignoringOtherApps: true)
-    }
-
-    private func pickScreen(widthPx: Int?, heightPx: Int?) -> NSScreen {
-        if let w = widthPx, let h = heightPx {
-            let matches = NSScreen.screens.filter {
-                Int(($0.frame.width * $0.backingScaleFactor).rounded()) == w
-                    && Int(($0.frame.height * $0.backingScaleFactor).rounded()) == h
-            }
-            if matches.count == 1 { return matches[0] }
-        }
-        return Capture.screenUnderCursor()
-    }
-
-    // MARK: - Helpers
-
-    private static func decodePNG(_ s: String) -> Data? {
-        let raw = s.hasPrefix("data:image/png;base64,")
-            ? String(s.dropFirst("data:image/png;base64,".count))
-            : s
-        return Data(base64Encoded: raw)
-    }
-
-    /// Overwrite an existing `.excalidraw` (and its sibling `.png`) in place.
-    private func saveToFile(path: String, pngB64: String, excalidraw: String) -> String {
-        let url = URL(fileURLWithPath: path)
-        if !excalidraw.isEmpty {
-            try? excalidraw.write(to: url, atomically: true, encoding: .utf8)
-        }
-        let png = url.deletingPathExtension().appendingPathExtension("png")
-        if let data = Self.decodePNG(pngB64) {
-            try? data.write(to: png)
-        }
-        SavedDocuments.prune()
-        return path
-    }
-
-    /// Create a new annotation file pair and return the `.excalidraw` path.
-    private func saveAnnotation(pngB64: String, excalidraw: String) -> String {
-        let dir = SettingsStore.resolvedSaveDir()
-        let ts = Int(Date().timeIntervalSince1970 * 1000)
-        let base = "\(dir)/Annotation-\(ts)"
-        if let data = Self.decodePNG(pngB64) {
-            try? data.write(to: URL(fileURLWithPath: base + ".png"))
-        }
-        if !excalidraw.isEmpty {
-            try? excalidraw.write(toFile: base + ".excalidraw", atomically: true, encoding: .utf8)
-        }
-        SavedDocuments.prune()
-        return base + ".excalidraw"
+        canvas.needsDisplay = true
     }
 }

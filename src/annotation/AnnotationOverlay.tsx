@@ -26,14 +26,18 @@ export default function AnnotationOverlay() {
 
   return (
     <div className="excali-root">
-      <Excalidraw
-        excalidrawAPI={(api: ExcalidrawImperativeAPI) => session.setApi(api)}
-        onChange={() => session.handleChange()}
-        initialData={{
-          appState: { viewBackgroundColor: "#ffffff", theme: "light", gridModeEnabled: false },
-        }}
-        renderTopRightUI={() => actions}
-      />
+      {/* Mount the heavy editor only while a document is open. At idle it's unmounted, so the
+          WebView keeps only WebKit + parsed JS resident (~tens of MB) instead of a live canvas. */}
+      {mode !== "idle" && (
+        <Excalidraw
+          excalidrawAPI={(api: ExcalidrawImperativeAPI) => session.setApi(api)}
+          onChange={() => session.handleChange()}
+          initialData={{
+            appState: { viewBackgroundColor: "#ffffff", theme: "light", gridModeEnabled: false },
+          }}
+          renderTopRightUI={() => actions}
+        />
+      )}
       {toast && <div className="excali-toast">{toast}</div>}
     </div>
   );

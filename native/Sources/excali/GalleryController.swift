@@ -71,6 +71,8 @@ final class GalleryController: NSObject, NSWindowDelegate {
     func close() {
         removeMonitor()
         panel?.orderOut(nil)
+        // Drop the decoded preview/thumbnail bitmaps — the gallery is gone, so don't hold them.
+        ThumbnailCache.clear()
     }
 
     func windowDidResignKey(_ notification: Notification) { close() }

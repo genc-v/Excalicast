@@ -10,13 +10,15 @@ export const captureScreen = () => invoke<Capture>("capture_screen");
 export const showOverlay = (dims?: { widthPx: number; heightPx: number }) =>
   invoke("show_overlay", dims ?? {}).catch(() => {});
 
-export const hideOverlay = () => invoke("hide_overlay").catch(() => {});
-
 /// Signals the native side that the web app has mounted and event listeners are registered.
 export const webReady = () => invoke("web_ready").catch(() => {});
 
 /// Asks the native side to hide + destroy the WebView, freeing all web memory while idle.
 export const releaseOverlay = () => invoke("release_overlay").catch(() => {});
+
+/// Hides the overlay but keeps the WebView alive (warm) so the next open is instant. The scene is
+/// purged before calling this, so the parked editor holds no screenshot/undo memory.
+export const parkOverlay = () => invoke("park_overlay").catch(() => {});
 
 export const getSettings = () =>
   invoke<AppSettings>("get_settings").catch(() => ({}) as AppSettings);

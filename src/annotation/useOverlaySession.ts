@@ -8,8 +8,6 @@ import { savePrefs } from "./prefs";
 import { canvasColors, frozenBackground, sceneAppState } from "./scene";
 import { flattenToPng } from "./exportImage";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 /**
  * Coordinates the annotation overlay: modes (frozen / whiteboard / opened file), autosave,
  * export, and the global-hotkey / Escape wiring. The React component is just the view.
@@ -31,8 +29,23 @@ export function useOverlaySession() {
     window.setTimeout(() => setToast((t) => (t === msg ? null : t)), ms);
   };
 
+  // The editor is only mounted while a document is open (mode !== "idle"), so the heavy Excalidraw
+  // React tree / canvas isn't resident at idle. Actions that need the API mount it and await this.
+  const apiWaiters = useRef<Array<(a: ExcalidrawImperativeAPI) => void>>([]);
+
   const setApi = (api: ExcalidrawImperativeAPI) => {
     apiRef.current = api;
+    const waiters = apiWaiters.current;
+    apiWaiters.current = [];
+    waiters.forEach((w) => w(api));
+  };
+
+  /// Mount the editor (by leaving "idle") if needed and resolve once its imperative API is live.
+  const ensureEditor = (targetMode: Mode): Promise<ExcalidrawImperativeAPI> => {
+    modeRef.current = targetMode;
+    setMode(targetMode);
+    if (apiRef.current) return Promise.resolve(apiRef.current);
+    return new Promise((resolve) => apiWaiters.current.push(resolve));
   };
 
   // ---- Autosave ----
@@ -71,21 +84,18 @@ export function useOverlaySession() {
 
   // ---- Scene setup shared by whiteboard / newBlank ----
   const loadBlankCanvas = async (targetMode: Mode) => {
-    const api = apiRef.current;
-    if (!api) return;
+    const api = await ensureEditor(targetMode);
     const settings = await cmd.getSettings();
     const { bg, stroke } = canvasColors(settings);
     bgRef.current = null;
     scaleRef.current = 1;
     pathRef.current = null;
     window.clearTimeout(saveTimer.current);
-    modeRef.current = targetMode;
     api.updateScene({
       elements: [],
       appState: sceneAppState(bg, settings.gridEnabled ?? false, stroke),
       captureUpdate: CaptureUpdateAction.NEVER,
     });
-    setMode(targetMode);
   };
 
   // ---- Actions ----
@@ -115,24 +125,22 @@ export function useOverlaySession() {
       return;
     }
 
-    await cmd.hideOverlay();
-    await sleep(120);
-
+    // Native hides its own overlay before capturing (and pre-fires the capture on the hotkey), so
+    // there's no web-side hide/settle delay on the critical path. Mount the editor in parallel with
+    // the capture so remounting from the idle (unmounted) state stays off the critical path.
     let cap: Capture;
+    let api: ExcalidrawImperativeAPI;
     try {
-      cap = await cmd.captureScreen();
+      [api, cap] = await Promise.all([ensureEditor("frozen"), cmd.captureScreen()]);
     } catch (e) {
       flashToast(`Capture failed: ${e}`);
       return;
     }
 
-    const api = apiRef.current;
-    if (!api) return;
     const settings = await cmd.getSettings();
     const { bg, stroke } = canvasColors(settings);
     pathRef.current = null;
     window.clearTimeout(saveTimer.current);
-    modeRef.current = "frozen";
 
     const { file, element } = frozenBackground(cap);
     api.addFiles([file as any]);
@@ -155,8 +163,6 @@ export function useOverlaySession() {
   };
 
   const openFile = async () => {
-    const api = apiRef.current;
-    if (!api) return;
     await autosaveNow();
     const res = await cmd.getPendingFile();
     if (!res) return;
@@ -167,6 +173,7 @@ export function useOverlaySession() {
       flashToast("Couldn't read that file");
       return;
     }
+    const api = await ensureEditor("file");
     const settings = await cmd.getSettings();
     const { bg, stroke } = canvasColors(settings);
     const files = data.files ? Object.values(data.files) : [];
@@ -175,7 +182,6 @@ export function useOverlaySession() {
     scaleRef.current = 1;
     pathRef.current = res.path;
     window.clearTimeout(saveTimer.current);
-    modeRef.current = "file";
     api.updateScene({
       elements: data.elements ?? [],
       appState: sceneAppState(bg, settings.gridEnabled ?? false, stroke),
@@ -241,9 +247,12 @@ export function useOverlaySession() {
     setMode("idle");
     bgRef.current = null;
     pathRef.current = null;
-    api?.updateScene({ elements: [] });
-    // Hide + destroy the WebView so the idle app releases all web memory.
-    await cmd.releaseOverlay();
+    // Going "idle" unmounts Excalidraw (see AnnotationOverlay), which frees the elements, the
+    // screenshot bitmap, and the undo stack in one shot — the editor is gone, not just cleared.
+    // Drop the stale API so the next open awaits a fresh mount instead of touching a dead tree.
+    apiRef.current = null;
+    // Hide the overlay but keep the WebView (WebKit process + parsed JS) warm so re-open is instant.
+    await cmd.parkOverlay();
   };
 
   // Debounced: remember tool defaults + autosave the document as the user works.

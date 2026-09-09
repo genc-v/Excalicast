@@ -1,6 +1,7 @@
 #!/bin/bash
-# Build excali as a native macOS .app: build the web frontend, build the Swift executable,
-# assemble the bundle, embed the web assets, and codesign with the stable self-signed identity.
+# Build excali as a native macOS .app: build the Swift executable, assemble the bundle, and codesign
+# with the stable self-signed identity. (native-canvas branch: the drawing editor is native AppKit —
+# there is no web frontend to build or embed.)
 set -euo pipefail
 
 NATIVE_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,21 +10,15 @@ APP="$NATIVE_DIR/dist/Excalicast.app"
 IDENTITY="excali-selfsign"
 KEYCHAIN="$HOME/Library/Keychains/excali-signing.keychain-db"
 
-echo "==> Building web frontend"
-cd "$ROOT_DIR"
-npm run build
-
 echo "==> Building Swift executable (release)"
 cd "$NATIVE_DIR"
-if [ -f "$HOME/.cargo/env" ]; then :; fi
 swift build -c release
 BIN="$NATIVE_DIR/.build/release/Excalicast"
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/web"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Excalicast"
-cp -R "$ROOT_DIR/dist/." "$APP/Contents/Resources/web/"
 
 if [ -f "$NATIVE_DIR/AppIcon.icns" ]; then
   cp "$NATIVE_DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"

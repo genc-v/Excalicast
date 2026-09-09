@@ -20,6 +20,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Route trackpad pinch (magnify) events to the overlay for Excalidraw zoom.
         ExcaliApplication.onMagnify = { [weak overlay] event in overlay?.forwardPinch(event) }
+
+        // Pre-warm the WebView (mount Excalidraw hidden) so the first annotate is instant. Deferred
+        // so it doesn't compete with launch or the Screen Recording prompt.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak overlay] in
+            overlay?.prewarm()
+        }
     }
 
     /// A standard Edit menu so ⌘X/⌘C/⌘V reach the WebView as cut:/copy:/paste: — required for
