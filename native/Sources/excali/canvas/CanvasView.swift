@@ -35,6 +35,7 @@ final class CanvasView: NSView {
     private var spaceHeld = false
     private var clipboard: [Element] = []
     private var multiPointId: String? // a line/arrow being built by clicking points one at a time
+    private var highlightBindId: String? // item an arrow endpoint is about to bind to (hover outline)
 
     private let handlePx: CGFloat = 5 // half-size of a resize/point handle, in screen points
 
@@ -80,7 +81,21 @@ final class CanvasView: NSView {
         if let id = editingElementId { render.elements.removeAll { $0.id == id } }
         CanvasRenderer.draw(render, in: ctx, images: images,
                             backingScale: window?.backingScaleFactor ?? 2)
+        if let id = highlightBindId, let el = scene.element(id: id) {
+            let r = screenRect(el.bounds).insetBy(dx: -6, dy: -6)
+            let path = CGPath(roundedRect: r, cornerWidth: 8, cornerHeight: 8, transform: nil)
+            ctx.saveGState()
+            ctx.setStrokeColor(NSColor.systemBlue.withAlphaComponent(0.9).cgColor)
+            ctx.setLineWidth(2.5)
+            ctx.addPath(path); ctx.strokePath()
+            ctx.restoreGState()
+        }
         drawSelectionChrome(in: ctx)
+    }
+
+    /// Highlight the bindable item an arrow endpoint at `world` would attach to (nil clears it).
+    private func updateBindHighlight(endpoint world: CGPoint, arrowId: String) {
+        highlightBindId = ArrowBinding.target(at: world, in: scene, excluding: arrowId)?.id
     }
 
     private func drawSelectionChrome(in ctx: CGContext) {
@@ -279,6 +294,7 @@ final class CanvasView: NSView {
         }
         scene.elements[i].points[last] = CGPoint(x: end.x - scene.elements[i].x,
                                                  y: end.y - scene.elements[i].y)
+        updateBindHighlight(endpoint: end, arrowId: id)
         needsDisplay = true
     }
 
@@ -300,6 +316,7 @@ final class CanvasView: NSView {
         default: break
         }
         drag = .none
+        highlightBindId = nil
         needsDisplay = true
     }
 
@@ -387,6 +404,9 @@ final class CanvasView: NSView {
                                                   y: target.y - scene.elements[i].y)
         // Re-anchor origin so points stay tidy and bounds/width/height stay correct.
         normalizeLinear(&scene.elements[i])
+        if index == 0 || index == scene.elements[i].points.count - 1 {
+            updateBindHighlight(endpoint: target, arrowId: id)
+        }
         afterGeometryChange([id])
         needsDisplay = true
     }
@@ -422,6 +442,7 @@ final class CanvasView: NSView {
             if shift { end = snap45(from: CGPoint(x: scene.elements[i].x, y: scene.elements[i].y), to: w) }
             scene.elements[i].points[1] = CGPoint(x: end.x - scene.elements[i].x,
                                                   y: end.y - scene.elements[i].y)
+            updateBindHighlight(endpoint: end, arrowId: id)
         } else {
             let e = scene.elements[i]
             var dw = w.x - e.x, dh = w.y - e.y
@@ -472,7 +493,7 @@ final class CanvasView: NSView {
     }
 
     func finishMultiPoint() {
-        defer { multiPointId = nil; window?.acceptsMouseMovedEvents = false }
+        defer { multiPointId = nil; window?.acceptsMouseMovedEvents = false; highlightBindId = nil }
         guard let mp = multiPointId, let i = scene.index(of: mp) else { return }
         // Drop the trailing floating point.
         if scene.elements[i].points.count > 2 { scene.elements[i].points.removeLast() }
@@ -599,7 +620,7 @@ final class CanvasView: NSView {
             default: return
             }
         }
-        if shift, chars == "1" { recenter(); return } // zoom to fit
+        if shift, chars == "1" { zoomToFit(); return } // Shift+1 = zoom to fit
 
         switch chars {
         case "v", "1": tool = .select
@@ -721,13 +742,27 @@ final class CanvasView: NSView {
         scene.zoom = 1; scene.scrollX = 0; scene.scrollY = 0; needsDisplay = true
     }
 
+    /// Reset to 100% zoom and center the content (or the locked screenshot) in the view.
     func recenter() {
+        scene.zoom = 1
+        let target = scene.elements.first(where: { $0.locked })?.bounds ?? scene.contentBounds()
+        if let b = target {
+            scene.scrollX = (bounds.width - b.width) / 2 - b.minX
+            scene.scrollY = (bounds.height - b.height) / 2 - b.minY
+        } else {
+            scene.scrollX = 0; scene.scrollY = 0
+        }
+        needsDisplay = true
+    }
+
+    /// Zoom so all content fits the viewport (Excalidraw's Shift+1). May zoom in or out.
+    func zoomToFit() {
         let target = scene.elements.first(where: { $0.locked })?.bounds ?? scene.contentBounds()
         guard let b = target, b.width > 0, b.height > 0 else { resetCamera(); return }
         let margin: CGFloat = 40
         let sx = (bounds.width - margin * 2) / b.width
         let sy = (bounds.height - margin * 2) / b.height
-        scene.zoom = max(0.1, min(1, min(sx, sy)))
+        scene.zoom = max(0.1, min(4, min(sx, sy)))
         scene.scrollX = (bounds.width / scene.zoom - b.width) / 2 - b.minX
         scene.scrollY = (bounds.height / scene.zoom - b.height) / 2 - b.minY
         needsDisplay = true

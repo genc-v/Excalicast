@@ -95,6 +95,12 @@ enum ArrowBinding {
         return nil
     }
 
+    /// The bindable item an arrow endpoint at `p` would attach to — used to highlight it while
+    /// drawing/dragging.
+    static func target(at p: CGPoint, in scene: Scene, excluding id: String) -> Element? {
+        shape(at: p, in: scene, excluding: id)
+    }
+
     private static func addBound(_ scene: inout Scene, shapeId: String, arrowId: String) {
         guard let i = scene.index(of: shapeId) else { return }
         if !scene.elements[i].boundElements.contains(arrowId) {
