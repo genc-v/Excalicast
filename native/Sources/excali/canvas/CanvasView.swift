@@ -225,7 +225,12 @@ final class CanvasView: NSView {
                 let pts = el.points.map { scene.toScreen(CGPoint(x: el.x + $0.x, y: el.y + $0.y)) }
                 // Endpoints/real vertices win first (slightly larger target).
                 for (i, p) in pts.enumerated() where near(screen, p, radius: handlePx + 3) {
-                    history.commit(scene.elements); drag = .draggingPoint(id: el.id, index: i); return true
+                    history.commit(scene.elements)
+                    // Grabbing a bound endpoint detaches it so you can drag it onto a different shape
+                    // (or into empty space); it re-binds on release wherever it lands.
+                    if i == 0 { ArrowBinding.detachEndpoint(&scene, arrowId: el.id, isStart: true) }
+                    else if i == pts.count - 1 { ArrowBinding.detachEndpoint(&scene, arrowId: el.id, isStart: false) }
+                    drag = .draggingPoint(id: el.id, index: i); return true
                 }
                 // Bend midpoints: tight target, and deferred until an actual drag (see pendingBend).
                 let mids = midpoints(pts)
@@ -357,9 +362,9 @@ final class CanvasView: NSView {
         let r = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
         if !additive { selection.removeAll() }
         for el in scene.elements where !el.locked && el.containerId == nil {
-            // For point-based strokes, require the marquee to actually cross the path — not just
-            // overlap the (often huge) diagonal bounding box.
-            let hit = el.usesPoints ? HitTest.rectIntersectsLinear(r, el) : r.intersects(el.bounds)
+            // Lines/arrows require the marquee to actually cross the path (their bounding box is a
+            // huge diagonal). A pen stroke is a compact blob, so it selects as one block by bounds.
+            let hit = el.isLinear ? HitTest.rectIntersectsLinear(r, el) : r.intersects(el.bounds)
             if hit { selection.insert(el.id) }
         }
     }

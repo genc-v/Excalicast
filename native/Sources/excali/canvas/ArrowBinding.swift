@@ -23,17 +23,33 @@ enum ArrowBinding {
         let startWorld = CGPoint(x: arrow.x + arrow.points[0].x, y: arrow.y + arrow.points[0].y)
         let endWorld = CGPoint(x: arrow.x + arrow.points[last].x, y: arrow.y + arrow.points[last].y)
 
-        if let s = shape(at: startWorld, in: scene, excluding: arrow.id) {
+        // Only (re)bind endpoints that are currently free, so dragging one endpoint doesn't disturb
+        // the other's connection.
+        if arrow.startBinding == nil, let s = shape(at: startWorld, in: scene, excluding: arrow.id) {
             let (ax, ay) = anchor(of: s, at: startWorld)
             scene.elements[i].startBinding = Binding(elementId: s.id, gap: 8, anchorX: ax, anchorY: ay)
             addBound(&scene, shapeId: s.id, arrowId: arrow.id)
         }
-        if let e = shape(at: endWorld, in: scene, excluding: arrow.id) {
+        if arrow.endBinding == nil, let e = shape(at: endWorld, in: scene, excluding: arrow.id) {
             let (ax, ay) = anchor(of: e, at: endWorld)
             scene.elements[i].endBinding = Binding(elementId: e.id, gap: 8, anchorX: ax, anchorY: ay)
             addBound(&scene, shapeId: e.id, arrowId: arrow.id)
         }
         recompute(&scene, arrowIndex: i)
+    }
+
+    /// Detach one end of an arrow (when the user grabs that endpoint to move/re-attach it), clearing
+    /// its binding and dropping it from the old shape's bound list.
+    static func detachEndpoint(_ scene: inout Scene, arrowId: String, isStart: Bool) {
+        guard let i = scene.index(of: arrowId) else { return }
+        let oldId = isStart ? scene.elements[i].startBinding?.elementId
+                            : scene.elements[i].endBinding?.elementId
+        if isStart { scene.elements[i].startBinding = nil } else { scene.elements[i].endBinding = nil }
+        if let oldId, let si = scene.index(of: oldId) {
+            let stillBound = scene.elements[i].startBinding?.elementId == oldId
+                || scene.elements[i].endBinding?.elementId == oldId
+            if !stillBound { scene.elements[si].boundElements.removeAll { $0 == arrowId } }
+        }
     }
 
     /// Reflow every arrow bound to any of the moved shapes (and reflow moved arrows themselves).
