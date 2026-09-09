@@ -103,7 +103,9 @@ final class OverlayController: NSObject {
         }
     }
 
-    func openFile(path: String) {
+    /// Open a saved document. `restoreCamera` reuses the saved scroll/zoom (for reopening the doc you
+    /// were last on); otherwise it centers the content (opening an older doc from the gallery).
+    func openFile(path: String, restoreCamera: Bool = false) {
         saveDocument(includePNG: true)
         guard let data = FileManager.default.contents(atPath: path) else { return }
         let parsed = ExcalidrawIO.parse(data)
@@ -116,7 +118,11 @@ final class OverlayController: NSObject {
         currentPath = path
         mode = .file
         showOverlay(forScreenUnderCursor: true)
-        canvas.recenter()
+        if restoreCamera, let c = parsed.camera {
+            canvas.setCamera(scrollX: c.scrollX, scrollY: c.scrollY, zoom: c.zoom)
+        } else {
+            canvas.recenter()
+        }
     }
 
     /// Translate a trackpad magnify into a zoom around the cursor.

@@ -97,7 +97,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.overlay.isShown {
                 self.overlay.emit("hotkey-recenter")
             } else if let path = SavedDocuments.newestPath() {
-                self.overlay.openFile(path: path)
+                // Reopening the doc you were last on restores where you were looking.
+                self.overlay.openFile(path: path, restoreCamera: true)
             }
         }
         hotkeys.register(id: 3, hotkey: SettingsStore.dismiss) { [weak self] in

@@ -746,6 +746,12 @@ final class CanvasView: NSView {
 
     // MARK: - Camera
 
+    /// Restore a saved camera (used when reopening the document you were last working on).
+    func setCamera(scrollX: CGFloat, scrollY: CGFloat, zoom: CGFloat) {
+        scene.scrollX = scrollX; scene.scrollY = scrollY; scene.zoom = max(0.1, min(30, zoom))
+        onZoomChange?(scene.zoom); needsDisplay = true
+    }
+
     /// Reset the camera to 1:1 with no offset (used by frozen mode so the screenshot fills exactly).
     func resetCamera() {
         scene.zoom = 1; scene.scrollX = 0; scene.scrollY = 0

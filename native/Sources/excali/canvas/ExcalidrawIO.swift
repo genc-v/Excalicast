@@ -37,6 +37,9 @@ enum ExcalidrawIO {
             "appState": [
                 "viewBackgroundColor": scene.backgroundColor,
                 "gridModeEnabled": scene.gridEnabled,
+                "scrollX": scene.scrollX,
+                "scrollY": scene.scrollY,
+                "zoom": ["value": scene.zoom],
             ],
             "files": files,
         ]
@@ -105,10 +108,21 @@ enum ExcalidrawIO {
 
     // MARK: - Read
 
-    /// Parse a document into (elements, decoded images, original dataURLs). Unknown kinds are skipped.
-    static func parse(_ data: Data) -> (elements: [Element], images: [String: CGImage], dataURLs: [String: String]) {
+    struct Camera { let scrollX: CGFloat; let scrollY: CGFloat; let zoom: CGFloat }
+
+    /// Parse a document into (elements, images, dataURLs, saved camera). Unknown kinds are skipped.
+    static func parse(_ data: Data) -> (elements: [Element], images: [String: CGImage],
+                                        dataURLs: [String: String], camera: Camera?) {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return ([], [:], [:])
+            return ([], [:], [:], nil)
+        }
+        var camera: Camera?
+        if let app = root["appState"] as? [String: Any] {
+            let sx = (app["scrollX"] as? NSNumber).map { CGFloat(truncating: $0) }
+            let sy = (app["scrollY"] as? NSNumber).map { CGFloat(truncating: $0) }
+            let z = ((app["zoom"] as? [String: Any])?["value"] as? NSNumber).map { CGFloat(truncating: $0) }
+                ?? (app["zoom"] as? NSNumber).map { CGFloat(truncating: $0) }
+            if let sx, let sy, let z { camera = Camera(scrollX: sx, scrollY: sy, zoom: z) }
         }
         var images: [String: CGImage] = [:]
         var dataURLs: [String: String] = [:]
@@ -125,7 +139,7 @@ enum ExcalidrawIO {
         for raw in (root["elements"] as? [[String: Any]] ?? []) {
             if let el = element(from: raw) { out.append(el) }
         }
-        return (out, images, dataURLs)
+        return (out, images, dataURLs, camera)
     }
 
     private static func element(from d: [String: Any]) -> Element? {
