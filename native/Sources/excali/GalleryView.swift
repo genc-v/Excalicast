@@ -1,5 +1,32 @@
 import SwiftUI
 
+/// A thumbnail that decodes off the main thread so the gallery window opens instantly and previews
+/// pop in, rather than blocking the UI while decoding each PNG synchronously.
+struct ThumbnailImage: View {
+    let path: String?
+    let maxPixel: CGFloat
+    @State private var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
+            } else {
+                Image(systemName: "doc.text.image")
+                    .font(.system(size: 26)).foregroundStyle(.secondary)
+            }
+        }
+        .task(id: path.map { "\($0)@\(Int(maxPixel))" }) {
+            guard let path else { image = nil; return }
+            let mp = maxPixel
+            let img = await Task.detached(priority: .userInitiated) {
+                ThumbnailCache.image(path: path, maxPixel: mp)
+            }.value
+            if !Task.isCancelled { image = img }
+        }
+    }
+}
+
 /// The Spotlight-style gallery UI: a glass grid with Pinned/Recent sections and a Quick Look
 /// preview. Pure view — all behavior lives in `GalleryController`.
 struct GalleryView: View {
@@ -64,17 +91,9 @@ struct GalleryView: View {
 
     private var previewView: some View {
         VStack(spacing: 12) {
-            if let item = current, let p = item.previewPath,
-               let img = ThumbnailCache.image(path: p, maxPixel: 1800) {
-                Image(nsImage: img)
-                    .resizable().aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .shadow(radius: 8)
-            } else {
-                Image(systemName: "doc.text.image")
-                    .font(.system(size: 64)).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+            ThumbnailImage(path: current?.previewPath, maxPixel: 1800)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .shadow(radius: 8)
             Text(current?.name ?? "").font(.headline)
             Text("space to close · ↩ open · ←→ browse")
                 .font(.caption).foregroundStyle(.secondary)
@@ -107,13 +126,8 @@ struct GalleryView: View {
             ZStack(alignment: .topTrailing) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.15))
-                    if let p = item.previewPath, let img = ThumbnailCache.image(path: p, maxPixel: 320) {
-                        Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
-                            .cornerRadius(8).padding(4)
-                    } else {
-                        Image(systemName: "doc.text.image").font(.system(size: 26))
-                            .foregroundStyle(.secondary)
-                    }
+                    ThumbnailImage(path: item.previewPath, maxPixel: 320)
+                        .cornerRadius(8).padding(4)
                 }
                 .frame(height: 100)
 
