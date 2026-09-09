@@ -14,10 +14,12 @@ enum ArrowBinding {
 
     /// After an arrow is drawn, bind either endpoint that lands on/near a shape.
     static func bindEndpoints(_ scene: inout Scene, arrowIndex i: Int) {
-        guard scene.elements.indices.contains(i), scene.elements[i].isLinear else { return }
+        guard scene.elements.indices.contains(i), scene.elements[i].isLinear,
+              scene.elements[i].points.count >= 2 else { return }
         let arrow = scene.elements[i]
+        let last = arrow.points.count - 1
         let startWorld = CGPoint(x: arrow.x + arrow.points[0].x, y: arrow.y + arrow.points[0].y)
-        let endWorld = CGPoint(x: arrow.x + arrow.points[1].x, y: arrow.y + arrow.points[1].y)
+        let endWorld = CGPoint(x: arrow.x + arrow.points[last].x, y: arrow.y + arrow.points[last].y)
 
         if let s = shape(at: startWorld, in: scene, excluding: arrow.id) {
             scene.elements[i].startBinding = Binding(elementId: s.id, gap: 8)
@@ -43,25 +45,28 @@ enum ArrowBinding {
         }
     }
 
-    /// Recompute a bound arrow's endpoints so they sit on the boundaries of the shapes they attach to.
+    /// Recompute a bound arrow's endpoints so they sit on the boundaries of the shapes they attach
+    /// to. Intermediate bend points are preserved.
     private static func recompute(_ scene: inout Scene, arrowIndex i: Int) {
-        guard scene.elements.indices.contains(i), scene.elements[i].isLinear else { return }
+        guard scene.elements.indices.contains(i), scene.elements[i].isLinear,
+              scene.elements[i].points.count >= 2 else { return }
         var arrow = scene.elements[i]
-        var start = CGPoint(x: arrow.x + arrow.points[0].x, y: arrow.y + arrow.points[0].y)
-        var end = CGPoint(x: arrow.x + arrow.points[1].x, y: arrow.y + arrow.points[1].y)
+        // Work in world space.
+        var world = arrow.points.map { CGPoint(x: arrow.x + $0.x, y: arrow.y + $0.y) }
+        let last = world.count - 1
 
         if let b = arrow.startBinding, let shape = scene.element(id: b.elementId) {
-            start = HitTest.boundaryPoint(of: shape, toward: end, gap: b.gap)
+            world[0] = HitTest.boundaryPoint(of: shape, toward: world[1], gap: b.gap)
         }
         if let b = arrow.endBinding, let shape = scene.element(id: b.elementId) {
-            end = HitTest.boundaryPoint(of: shape, toward: start, gap: b.gap)
+            world[last] = HitTest.boundaryPoint(of: shape, toward: world[last - 1], gap: b.gap)
         }
-        // Re-anchor the element origin at `start`; points become relative to it.
-        arrow.x = start.x
-        arrow.y = start.y
-        arrow.points = [CGPoint(x: 0, y: 0), CGPoint(x: end.x - start.x, y: end.y - start.y)]
-        arrow.width = abs(end.x - start.x)
-        arrow.height = abs(end.y - start.y)
+        // Re-anchor origin at the first point; points become relative.
+        let origin = world[0]
+        arrow.x = origin.x; arrow.y = origin.y
+        arrow.points = world.map { CGPoint(x: $0.x - origin.x, y: $0.y - origin.y) }
+        let b = arrow.bounds
+        arrow.width = b.width; arrow.height = b.height
         scene.elements[i] = arrow
     }
 

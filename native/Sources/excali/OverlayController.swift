@@ -53,7 +53,11 @@ final class OverlayController: NSObject {
         container.addSubview(canvas)
 
         toolbar.translatesAutoresizingMaskIntoConstraints = false
-        toolbar.onTool = { [weak self] tool in self?.canvas.tool = tool }
+        toolbar.onTool = { [weak self] tool in
+            guard let self else { return }
+            self.canvas.tool = tool
+            self.panel.makeFirstResponder(self.canvas) // keep keyboard shortcuts working after a click
+        }
         toolbar.onAction = { [weak self] name in self?.handleToolbarAction(name) }
         container.addSubview(toolbar)
         NSLayoutConstraint.activate([
@@ -144,7 +148,7 @@ final class OverlayController: NSObject {
             canvas.scene.elements = [bg]
             mode = .frozen
             showOverlay(widthPx: cap.widthPx, heightPx: cap.heightPx)
-            canvas.recenter()
+            canvas.resetCamera() // screenshot fills the screen exactly at 1:1
         }
     }
 

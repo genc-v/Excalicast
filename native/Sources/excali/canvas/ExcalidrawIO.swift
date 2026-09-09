@@ -11,9 +11,11 @@ enum ExcalidrawIO {
     static func fileData(_ scene: Scene, images: [String: CGImage]) -> Data? {
         var elementDicts: [[String: Any]] = []
         var files: [String: Any] = [:]
+        var kindOf: [String: ElementKind] = [:]
+        for el in scene.elements { kindOf[el.id] = el.kind }
 
         for el in scene.elements {
-            elementDicts.append(elementDict(el))
+            elementDicts.append(elementDict(el, kindOf: kindOf))
             if el.kind == .image, let fid = el.fileId, let img = images[fid],
                let dataURL = pngDataURL(img) {
                 files[fid] = [
@@ -37,7 +39,7 @@ enum ExcalidrawIO {
         return try? JSONSerialization.data(withJSONObject: doc, options: [.prettyPrinted])
     }
 
-    private static func elementDict(_ el: Element) -> [String: Any] {
+    private static func elementDict(_ el: Element, kindOf: [String: ElementKind]) -> [String: Any] {
         var d: [String: Any] = [
             "id": el.id,
             "type": el.kind.rawValue,
@@ -57,7 +59,9 @@ enum ExcalidrawIO {
             "version": 1,
             "versionNonce": Int.random(in: 1...2_000_000_000),
             "isDeleted": false,
-            "boundElements": el.boundElements.map { ["id": $0, "type": "arrow"] },
+            "boundElements": el.boundElements.map {
+                ["id": $0, "type": (kindOf[$0] == .text ? "text" : "arrow")]
+            },
             "updated": 1,
             "link": NSNull(),
             "locked": el.locked,
@@ -75,10 +79,11 @@ enum ExcalidrawIO {
             d["originalText"] = el.text
             d["fontSize"] = el.fontSize
             d["fontFamily"] = el.fontFamily
-            d["textAlign"] = "left"
-            d["verticalAlign"] = "top"
+            d["textAlign"] = el.containerId != nil ? "center" : "left"
+            d["verticalAlign"] = el.containerId != nil ? "middle" : "top"
             d["lineHeight"] = 1.25
             d["baseline"] = el.fontSize
+            d["containerId"] = el.containerId as Any? ?? NSNull()
         }
         if el.kind == .image, let fid = el.fileId {
             d["fileId"] = fid
@@ -142,6 +147,7 @@ enum ExcalidrawIO {
         el.text = d["text"] as? String ?? ""
         el.fontSize = (d["fontSize"] as? NSNumber).map { CGFloat(truncating: $0) } ?? 20
         el.fontFamily = d["fontFamily"] as? Int ?? 1
+        el.containerId = d["containerId"] as? String
         el.fileId = d["fileId"] as? String
         return el
     }

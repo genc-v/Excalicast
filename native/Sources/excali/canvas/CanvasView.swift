@@ -1,10 +1,13 @@
 import AppKit
 import CoreGraphics
 
-/// The tools a user can pick. `select` manipulates existing elements; the rest create new ones.
+/// The tools a user can pick. `select` manipulates existing elements, `hand` pans, the rest create.
 enum Tool: String {
-    case select, rectangle, ellipse, diamond, line, arrow, text
+    case select, hand, rectangle, ellipse, diamond, line, arrow, text
 }
+
+/// The eight resize handles around a shape's bounding box.
+enum ResizeHandle { case nw, n, ne, e, se, s, sw, w }
 
 /// The native drawing surface. Owns the scene + camera, handles all pointer/keyboard/trackpad input,
 /// and renders via `CanvasRenderer`. Replaces the WKWebView inside the overlay panel.
@@ -26,12 +29,13 @@ final class CanvasView: NSView {
     var editingTextView: CanvasTextView?
     var editingElementId: String?
 
-    /// Called after any change that should trigger autosave.
     var onChange: (() -> Void)?
-    /// Called when the user requests dismiss (Esc with nothing to cancel).
     var onDismiss: (() -> Void)?
 
-    // MARK: - Drag state
+    private var spaceHeld = false
+    private var clipboard: [Element] = []
+
+    private let handlePx: CGFloat = 5 // half-size of a resize/point handle, in screen points
 
     private enum Drag {
         case none
@@ -39,12 +43,14 @@ final class CanvasView: NSView {
         case moving(lastWorld: CGPoint)
         case marquee(start: CGPoint, current: CGPoint)
         case panning(lastScreen: CGPoint)
+        case resizing(id: String, handle: ResizeHandle, orig: CGRect)
+        case draggingPoint(id: String, index: Int)
     }
     private var drag: Drag = .none
 
     // MARK: - Setup
 
-    override var isFlipped: Bool { true } // y grows downward, matching screen + Excalidraw coords
+    override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -59,7 +65,6 @@ final class CanvasView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         var render = scene
-        // The element being edited is shown by the live NSTextView overlay instead.
         if let id = editingElementId { render.elements.removeAll { $0.id == id } }
         CanvasRenderer.draw(render, in: ctx, images: images,
                             backingScale: window?.backingScaleFactor ?? 2)
@@ -68,23 +73,57 @@ final class CanvasView: NSView {
 
     private func drawSelectionChrome(in ctx: CGContext) {
         ctx.saveGState()
-        ctx.setStrokeColor(NSColor.systemBlue.cgColor)
+        ctx.setStrokeColor(NSColor.controlAccentColor.cgColor)
+        ctx.setFillColor(NSColor.white.cgColor)
         ctx.setLineWidth(1)
+
+        let single = selection.count == 1 ? scene.element(id: selection.first!) : nil
         for id in selection {
             guard let el = scene.element(id: id) else { continue }
-            let r = screenRect(el.bounds).insetBy(dx: -3, dy: -3)
-            ctx.stroke(r)
+            if el.isLinear {
+                // Lines/arrows: no bounding box — draw point handles (and bend midpoints if single).
+                let pts = el.points.map { scene.toScreen(CGPoint(x: el.x + $0.x, y: el.y + $0.y)) }
+                if selection.count == 1 {
+                    for (i, p) in pts.enumerated() where i > 0 && i < pts.count - 1 {
+                        drawHandle(p, in: ctx, filled: true)
+                    }
+                    for m in midpoints(pts) { drawHandle(m, in: ctx, filled: false) }
+                }
+                if let f = pts.first { drawHandle(f, in: ctx, filled: true) }
+                if let l = pts.last { drawHandle(l, in: ctx, filled: true) }
+            } else {
+                let r = screenRect(el.bounds).insetBy(dx: -1, dy: -1)
+                ctx.stroke(r)
+            }
         }
+        // Resize handles only for a single non-linear, unlocked shape.
+        if let el = single, !el.isLinear, !el.locked, el.kind != .text {
+            for (_, p) in resizeHandlePoints(el) { drawHandle(p, in: ctx, filled: true) }
+        }
+
         if case let .marquee(start, current) = drag {
             let a = scene.toScreen(start), b = scene.toScreen(current)
-            let r = CGRect(x: min(a.x, b.x), y: min(a.y, b.y),
-                           width: abs(a.x - b.x), height: abs(a.y - b.y))
-            ctx.setFillColor(NSColor.systemBlue.withAlphaComponent(0.1).cgColor)
+            let r = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
+            ctx.setFillColor(NSColor.controlAccentColor.withAlphaComponent(0.1).cgColor)
             ctx.fill(r)
             ctx.setLineDash(phase: 0, lengths: [4, 3])
             ctx.stroke(r)
         }
         ctx.restoreGState()
+    }
+
+    private func drawHandle(_ p: CGPoint, in ctx: CGContext, filled: Bool) {
+        let r = CGRect(x: p.x - handlePx, y: p.y - handlePx, width: handlePx * 2, height: handlePx * 2)
+        ctx.setFillColor(filled ? NSColor.controlAccentColor.cgColor : NSColor.white.cgColor)
+        ctx.fillEllipse(in: r)
+        ctx.strokeEllipse(in: r)
+    }
+
+    private func midpoints(_ pts: [CGPoint]) -> [CGPoint] {
+        guard pts.count >= 2 else { return [] }
+        return (0..<(pts.count - 1)).map {
+            CGPoint(x: (pts[$0].x + pts[$0 + 1].x) / 2, y: (pts[$0].y + pts[$0 + 1].y) / 2)
+        }
     }
 
     private func screenRect(_ world: CGRect) -> CGRect {
@@ -96,52 +135,108 @@ final class CanvasView: NSView {
         scene.toWorld(convert(event.locationInWindow, from: nil))
     }
 
+    // MARK: - Handle geometry
+
+    private func resizeHandlePoints(_ el: Element) -> [(ResizeHandle, CGPoint)] {
+        let r = screenRect(el.bounds)
+        return [
+            (.nw, CGPoint(x: r.minX, y: r.minY)), (.n, CGPoint(x: r.midX, y: r.minY)),
+            (.ne, CGPoint(x: r.maxX, y: r.minY)), (.e, CGPoint(x: r.maxX, y: r.midY)),
+            (.se, CGPoint(x: r.maxX, y: r.maxY)), (.s, CGPoint(x: r.midX, y: r.maxY)),
+            (.sw, CGPoint(x: r.minX, y: r.maxY)), (.w, CGPoint(x: r.minX, y: r.midY)),
+        ]
+    }
+
+    private func near(_ a: CGPoint, _ b: CGPoint) -> Bool {
+        abs(a.x - b.x) <= handlePx + 2 && abs(a.y - b.y) <= handlePx + 2
+    }
+
     // MARK: - Mouse
 
     override func mouseDown(with event: NSEvent) {
-        if editingTextView != nil { commitTextEditing() } // clicking the canvas commits any edit
+        if editingTextView != nil { commitTextEditing() }
         window?.makeFirstResponder(self)
         let w = worldPoint(event)
-        // Option held → pan regardless of tool.
-        if event.modifierFlags.contains(.option) {
-            drag = .panning(lastScreen: convert(event.locationInWindow, from: nil))
-            return
+        let screen = convert(event.locationInWindow, from: nil)
+
+        if spaceHeld || tool == .hand || event.modifierFlags.contains(.option) {
+            drag = .panning(lastScreen: screen); return
         }
+
         switch tool {
         case .select:
-            // Double-click a text element to edit it.
-            if event.clickCount == 2, let hit = HitTest.topmost(scene.elements, w, tolerance: 6 / scene.zoom),
-               hit.kind == .text {
-                beginTextEditing(at: CGPoint(x: hit.x, y: hit.y), existing: hit)
-                return
-            }
-            beginSelectOrMove(at: w, event: event)
+            if beginSelectInteraction(worldPoint: w, screenPoint: screen, event: event) { return }
         case .rectangle, .ellipse, .diamond:
             beginCreateShape(at: w)
         case .line, .arrow:
             beginCreateLinear(at: w)
         case .text:
             beginTextEditing(at: w, existing: nil)
+        case .hand:
+            drag = .panning(lastScreen: screen)
         }
+    }
+
+    /// Returns true if it fully handled the event (resize/bend/edit); false to fall through.
+    private func beginSelectInteraction(worldPoint w: CGPoint, screenPoint screen: CGPoint,
+                                        event: NSEvent) -> Bool {
+        // Handles of a single selected element take priority.
+        if selection.count == 1, let el = scene.element(id: selection.first!) {
+            if el.isLinear {
+                let pts = el.points.map { scene.toScreen(CGPoint(x: el.x + $0.x, y: el.y + $0.y)) }
+                for (i, p) in pts.enumerated() where near(screen, p) {
+                    history.commit(scene.elements); drag = .draggingPoint(id: el.id, index: i); return true
+                }
+                let mids = midpoints(pts)
+                for (i, m) in mids.enumerated() where near(screen, m) {
+                    history.commit(scene.elements); insertBendPoint(id: el.id, afterSegment: i, at: w)
+                    drag = .draggingPoint(id: el.id, index: i + 1); return true
+                }
+            } else if !el.locked, el.kind != .text {
+                for (handle, p) in resizeHandlePoints(el) where near(screen, p) {
+                    history.commit(scene.elements)
+                    drag = .resizing(id: el.id, handle: handle, orig: el.bounds); return true
+                }
+            }
+        }
+
+        // Double-click: edit or add bound text.
+        if event.clickCount == 2 {
+            let tol = 6 / scene.zoom
+            if let hit = HitTest.topmost(scene.elements, w, tolerance: tol) {
+                if hit.kind == .text {
+                    beginTextEditing(at: CGPoint(x: hit.x, y: hit.y), existing: hit)
+                } else {
+                    editOrCreateBoundText(container: hit)
+                }
+                return true
+            }
+        }
+
+        beginSelectOrMove(at: w, event: event)
+        return true
     }
 
     override func mouseDragged(with event: NSEvent) {
         let w = worldPoint(event)
+        let shift = event.modifierFlags.contains(.shift)
         switch drag {
         case .panning(let last):
             let now = convert(event.locationInWindow, from: nil)
             scene.scrollX += (now.x - last.x) / scene.zoom
             scene.scrollY += (now.y - last.y) / scene.zoom
-            drag = .panning(lastScreen: now)
-            needsDisplay = true
+            drag = .panning(lastScreen: now); needsDisplay = true
         case .creating(let id):
-            updateCreating(id: id, to: w)
+            updateCreating(id: id, to: w, shift: shift)
         case .moving(let last):
             moveSelection(by: CGPoint(x: w.x - last.x, y: w.y - last.y))
             drag = .moving(lastWorld: w)
         case .marquee(let start, _):
-            drag = .marquee(start: start, current: w)
-            needsDisplay = true
+            drag = .marquee(start: start, current: w); needsDisplay = true
+        case .resizing(let id, let handle, let orig):
+            resizeElement(id: id, handle: handle, orig: orig, to: w, shift: shift)
+        case .draggingPoint(let id, let index):
+            movePoint(id: id, index: index, to: w, shift: shift)
         case .none:
             break
         }
@@ -149,14 +244,13 @@ final class CanvasView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         switch drag {
-        case .creating(let id):
-            finishCreating(id: id)
+        case .creating(let id): finishCreating(id: id)
         case .marquee(let start, let current):
             commitMarquee(from: start, to: current, additive: event.modifierFlags.contains(.shift))
-        case .moving:
-            onChange?()
-        default:
-            break
+        case .moving: onChange?()
+        case .resizing(let id, _, _): afterGeometryChange([id]); onChange?()
+        case .draggingPoint(let id, _): rebindLinear(id: id); afterGeometryChange([id]); onChange?()
+        default: break
         }
         drag = .none
         needsDisplay = true
@@ -172,10 +266,7 @@ final class CanvasView: NSView {
             } else if !selection.contains(hit.id) {
                 selection = [hit.id]
             }
-            if !selection.isEmpty {
-                history.commit(scene.elements)
-                drag = .moving(lastWorld: w)
-            }
+            if !selection.isEmpty { history.commit(scene.elements); drag = .moving(lastWorld: w) }
         } else {
             if !event.modifierFlags.contains(.shift) { selection.removeAll() }
             drag = .marquee(start: w, current: w)
@@ -189,16 +280,68 @@ final class CanvasView: NSView {
             scene.elements[i].x += delta.x
             scene.elements[i].y += delta.y
         }
-        reflowBoundArrows(movedIds: selection)
+        afterGeometryChange(selection)
         needsDisplay = true
     }
 
     private func commitMarquee(from a: CGPoint, to b: CGPoint, additive: Bool) {
         let r = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
         if !additive { selection.removeAll() }
-        for el in scene.elements where !el.locked {
+        for el in scene.elements where !el.locked && el.containerId == nil {
             if r.intersects(el.bounds) { selection.insert(el.id) }
         }
+    }
+
+    // MARK: - Resize / bend
+
+    private func resizeElement(id: String, handle: ResizeHandle, orig: CGRect, to w: CGPoint, shift: Bool) {
+        guard let i = scene.index(of: id) else { return }
+        var minX = orig.minX, minY = orig.minY, maxX = orig.maxX, maxY = orig.maxY
+        switch handle {
+        case .nw: minX = w.x; minY = w.y
+        case .n: minY = w.y
+        case .ne: maxX = w.x; minY = w.y
+        case .e: maxX = w.x
+        case .se: maxX = w.x; maxY = w.y
+        case .s: maxY = w.y
+        case .sw: minX = w.x; maxY = w.y
+        case .w: minX = w.x
+        }
+        var rect = CGRect(x: min(minX, maxX), y: min(minY, maxY),
+                          width: abs(maxX - minX), height: abs(maxY - minY))
+        if shift, rect.width > 0, rect.height > 0 { // keep aspect from original
+            let s = max(rect.width / max(orig.width, 1), rect.height / max(orig.height, 1))
+            rect.size = CGSize(width: orig.width * s, height: orig.height * s)
+        }
+        scene.elements[i].x = rect.minX
+        scene.elements[i].y = rect.minY
+        scene.elements[i].width = max(2, rect.width)
+        scene.elements[i].height = max(2, rect.height)
+        afterGeometryChange([id])
+        needsDisplay = true
+    }
+
+    private func insertBendPoint(id: String, afterSegment i: Int, at w: CGPoint) {
+        guard let idx = scene.index(of: id) else { return }
+        let rel = CGPoint(x: w.x - scene.elements[idx].x, y: w.y - scene.elements[idx].y)
+        scene.elements[idx].points.insert(rel, at: i + 1)
+    }
+
+    private func movePoint(id: String, index: Int, to w: CGPoint, shift: Bool) {
+        guard let i = scene.index(of: id), scene.elements[i].points.indices.contains(index) else { return }
+        var target = w
+        if shift, scene.elements[i].points.count >= 2 { // snap to 45° from the neighbouring point
+            let neighbor = index > 0 ? index - 1 : 1
+            let base = CGPoint(x: scene.elements[i].x + scene.elements[i].points[neighbor].x,
+                               y: scene.elements[i].y + scene.elements[i].points[neighbor].y)
+            target = snap45(from: base, to: w)
+        }
+        scene.elements[i].points[index] = CGPoint(x: target.x - scene.elements[i].x,
+                                                  y: target.y - scene.elements[i].y)
+        // Re-anchor origin so points stay tidy and bounds/width/height stay correct.
+        normalizeLinear(&scene.elements[i])
+        afterGeometryChange([id])
+        needsDisplay = true
     }
 
     // MARK: - Create shapes / lines
@@ -206,7 +349,7 @@ final class CanvasView: NSView {
     private func beginCreateShape(at w: CGPoint) {
         history.commit(scene.elements)
         var el = Element(kind: toolKind())
-        el.x = w.x; el.y = w.y; el.width = 0; el.height = 0
+        el.x = w.x; el.y = w.y
         applyStyle(&el)
         scene.elements.append(el)
         selection = [el.id]
@@ -225,15 +368,19 @@ final class CanvasView: NSView {
         drag = .creating(id: el.id)
     }
 
-    private func updateCreating(id: String, to w: CGPoint) {
+    private func updateCreating(id: String, to w: CGPoint, shift: Bool) {
         guard let i = scene.index(of: id) else { return }
         if scene.elements[i].isLinear {
-            scene.elements[i].points[1] = CGPoint(x: w.x - scene.elements[i].x,
-                                                  y: w.y - scene.elements[i].y)
+            var end = w
+            if shift { end = snap45(from: CGPoint(x: scene.elements[i].x, y: scene.elements[i].y), to: w) }
+            scene.elements[i].points[1] = CGPoint(x: end.x - scene.elements[i].x,
+                                                  y: end.y - scene.elements[i].y)
         } else {
             let e = scene.elements[i]
-            scene.elements[i].width = w.x - e.x
-            scene.elements[i].height = w.y - e.y
+            var dw = w.x - e.x, dh = w.y - e.y
+            if shift { let s = max(abs(dw), abs(dh)); dw = dw < 0 ? -s : s; dh = dh < 0 ? -s : s }
+            scene.elements[i].width = dw
+            scene.elements[i].height = dh
         }
         needsDisplay = true
     }
@@ -242,11 +389,12 @@ final class CanvasView: NSView {
         guard let i = scene.index(of: id) else { return }
         var el = scene.elements[i]
         if el.isLinear {
-            let end = el.points[1]
-            if hypot(end.x, end.y) < 3 { scene.elements.remove(at: i); selection.removeAll(); return }
-            tryBindLinearEndpoints(index: i)
+            if hypot(el.points[1].x, el.points[1].y) < 3 {
+                scene.elements.remove(at: i); selection.removeAll(); return
+            }
+            normalizeLinear(&scene.elements[i])
+            rebindLinear(id: id)
         } else {
-            // Normalize negative drags so width/height stay positive.
             if el.width < 0 { el.x += el.width; el.width = -el.width }
             if el.height < 0 { el.y += el.height; el.height = -el.height }
             if el.width < 3 && el.height < 3 { scene.elements.remove(at: i); selection.removeAll(); return }
@@ -271,50 +419,136 @@ final class CanvasView: NSView {
         el.strokeWidth = strokeWidth
     }
 
-    // MARK: - Binding hooks (implemented in the binding phase)
+    // MARK: - Geometry helpers
+
+    /// Snap the vector base→p to the nearest 45° increment.
+    private func snap45(from base: CGPoint, to p: CGPoint) -> CGPoint {
+        let dx = p.x - base.x, dy = p.y - base.y
+        let len = hypot(dx, dy)
+        guard len > 0 else { return p }
+        let angle = atan2(dy, dx)
+        let snapped = (angle / (.pi / 4)).rounded() * (.pi / 4)
+        return CGPoint(x: base.x + cos(snapped) * len, y: base.y + sin(snapped) * len)
+    }
+
+    /// Re-anchor a linear element's origin at its first point so points stay relative and bounds fit.
+    private func normalizeLinear(_ el: inout Element) {
+        guard let first = el.points.first else { return }
+        if first != .zero {
+            el.x += first.x; el.y += first.y
+            el.points = el.points.map { CGPoint(x: $0.x - first.x, y: $0.y - first.y) }
+        }
+        let b = el.bounds
+        el.width = b.width; el.height = b.height
+    }
+
+    // MARK: - Binding / bound text
+
+    private func afterGeometryChange(_ ids: Set<String>) {
+        ArrowBinding.reflow(&scene, movedIds: ids)
+        layoutBoundText()
+    }
 
     func reflowBoundArrows(movedIds: Set<String>) { ArrowBinding.reflow(&scene, movedIds: movedIds) }
-    private func tryBindLinearEndpoints(index: Int) { ArrowBinding.bindEndpoints(&scene, arrowIndex: index) }
+    private func rebindLinear(id: String) {
+        if let i = scene.index(of: id) { ArrowBinding.bindEndpoints(&scene, arrowIndex: i) }
+    }
+
+    /// Re-center every bound text inside its container (shape center) or a line's midpoint.
+    func layoutBoundText() {
+        for i in scene.elements.indices where scene.elements[i].kind == .text {
+            guard let cid = scene.elements[i].containerId, let c = scene.element(id: cid) else { continue }
+            let size = CanvasRenderer.measureText(scene.elements[i])
+            let anchor: CGPoint
+            if c.isLinear {
+                let a = CGPoint(x: c.x + (c.points.first?.x ?? 0), y: c.y + (c.points.first?.y ?? 0))
+                let b = CGPoint(x: c.x + (c.points.last?.x ?? 0), y: c.y + (c.points.last?.y ?? 0))
+                anchor = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+            } else {
+                anchor = c.center
+            }
+            scene.elements[i].x = anchor.x - size.width / 2
+            scene.elements[i].y = anchor.y - size.height / 2
+        }
+    }
 
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
         let cmd = event.modifierFlags.contains(.command)
         let shift = event.modifierFlags.contains(.shift)
+        let chars = (event.charactersIgnoringModifiers ?? "").lowercased()
+
         switch event.keyCode {
         case 53: // Esc
             if !selection.isEmpty || tool != .select { selection.removeAll(); tool = .select; needsDisplay = true }
             else { onDismiss?() }
             return
-        case 51, 117: // Delete / Forward-delete
+        case 49: // Space -> temporary pan
+            if !spaceHeld { spaceHeld = true; NSCursor.openHand.set() }
+            return
+        case 51, 117: // Delete
             if !selection.isEmpty { deleteSelection() }
             return
+        case 123, 124, 125, 126: // arrows -> nudge
+            if !selection.isEmpty { nudge(keyCode: event.keyCode, big: shift); return }
         default: break
         }
-        if cmd, event.charactersIgnoringModifiers == "z" {
-            if shift { redo() } else { undo() }; return
+
+        if cmd {
+            switch chars {
+            case "z": shift ? redo() : undo(); return
+            case "a": selection = Set(scene.elements.filter { !$0.locked && $0.containerId == nil }.map { $0.id }); needsDisplay = true; return
+            case "c": clipboard = scene.elements.filter { selection.contains($0.id) }; return
+            case "v": pasteElements(); return
+            case "x": clipboard = scene.elements.filter { selection.contains($0.id) }; deleteSelection(); return
+            case "d": duplicateSelection(); return
+            case "=", "+": zoomStep(1.1); return
+            case "-", "_": zoomStep(1 / 1.1); return
+            case "0": scene.zoom = 1; needsDisplay = true; return
+            default: return
+            }
         }
-        if cmd, event.charactersIgnoringModifiers == "a" {
-            selection = Set(scene.elements.filter { !$0.locked }.map { $0.id }); needsDisplay = true; return
-        }
-        // Single-key tool shortcuts (Excalidraw-style).
-        switch event.charactersIgnoringModifiers {
+        if shift, chars == "1" { recenter(); return } // zoom to fit
+
+        switch chars {
         case "v", "1": tool = .select
+        case "h": tool = .hand
         case "r", "2": tool = .rectangle
-        case "o", "4": tool = .ellipse
         case "d", "3": tool = .diamond
-        case "l", "6": tool = .line
+        case "o", "4": tool = .ellipse
         case "a", "5": tool = .arrow
+        case "l", "6": tool = .line
         case "t", "8": tool = .text
         default: super.keyDown(with: event)
         }
     }
 
+    override func keyUp(with event: NSEvent) {
+        if event.keyCode == 49 { spaceHeld = false; updateCursor() }
+    }
+
+    private func nudge(keyCode: UInt16, big: Bool) {
+        let step: CGFloat = big ? 10 : 1
+        var dx: CGFloat = 0, dy: CGFloat = 0
+        switch keyCode { case 123: dx = -step; case 124: dx = step; case 125: dy = step; case 126: dy = -step; default: break }
+        history.commit(scene.elements)
+        for id in selection {
+            guard let i = scene.index(of: id) else { continue }
+            scene.elements[i].x += dx; scene.elements[i].y += dy
+        }
+        afterGeometryChange(selection); onChange?(); needsDisplay = true
+    }
+
     private func deleteSelection() {
         history.commit(scene.elements)
-        scene.elements.removeAll { selection.contains($0.id) }
-        // Also clear bindings that referenced deleted arrows/shapes.
-        ArrowBinding.purge(&scene, deleted: selection)
+        // Deleting a container also removes its bound text.
+        var toRemove = selection
+        for el in scene.elements where el.containerId != nil && selection.contains(el.containerId!) {
+            toRemove.insert(el.id)
+        }
+        scene.elements.removeAll { toRemove.contains($0.id) }
+        ArrowBinding.purge(&scene, deleted: toRemove)
         selection.removeAll()
         onChange?(); needsDisplay = true
     }
@@ -330,15 +564,57 @@ final class CanvasView: NSView {
         }
     }
 
+    // MARK: - Copy / paste / duplicate
+
+    private func cloneElements(_ els: [Element], offset: CGFloat) -> [Element] {
+        var idMap: [String: String] = [:]
+        var copies = els.map { e -> Element in
+            var c = e; let nid = Element.newId(); idMap[e.id] = nid
+            c.id = nid; c.x += offset; c.y += offset; return c
+        }
+        for i in copies.indices {
+            if let b = copies[i].startBinding { copies[i].startBinding = idMap[b.elementId].map { Binding(elementId: $0, focus: b.focus, gap: b.gap) } }
+            if let b = copies[i].endBinding { copies[i].endBinding = idMap[b.elementId].map { Binding(elementId: $0, focus: b.focus, gap: b.gap) } }
+            copies[i].boundElements = copies[i].boundElements.compactMap { idMap[$0] }
+            if let cid = copies[i].containerId { copies[i].containerId = idMap[cid] }
+        }
+        return copies
+    }
+
+    private func pasteElements() {
+        guard !clipboard.isEmpty else { return }
+        history.commit(scene.elements)
+        let copies = cloneElements(clipboard, offset: 20)
+        scene.elements.append(contentsOf: copies)
+        selection = Set(copies.filter { $0.containerId == nil }.map { $0.id })
+        onChange?(); needsDisplay = true
+    }
+
+    private func duplicateSelection() {
+        guard !selection.isEmpty else { return }
+        history.commit(scene.elements)
+        let sel = scene.elements.filter { selection.contains($0.id) }
+        let copies = cloneElements(sel, offset: 20)
+        scene.elements.append(contentsOf: copies)
+        selection = Set(copies.filter { $0.containerId == nil }.map { $0.id })
+        onChange?(); needsDisplay = true
+    }
+
     // MARK: - Pan / zoom
 
     override func scrollWheel(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            let p = convert(event.locationInWindow, from: nil)
+            zoom(by: 1 + event.scrollingDeltaY * 0.01, at: p)
+            return
+        }
         scene.scrollX += event.scrollingDeltaX / scene.zoom
         scene.scrollY += event.scrollingDeltaY / scene.zoom
         needsDisplay = true
     }
 
-    /// Zoom around a screen anchor point (called from the app's pinch handler).
+    private func zoomStep(_ f: CGFloat) { zoom(by: f, at: CGPoint(x: bounds.midX, y: bounds.midY)) }
+
     func zoom(by factor: CGFloat, at screenPoint: CGPoint) {
         let before = scene.toWorld(screenPoint)
         scene.zoom = max(0.1, min(30, scene.zoom * factor))
@@ -348,14 +624,16 @@ final class CanvasView: NSView {
         needsDisplay = true
     }
 
-    // MARK: - Camera helpers
+    // MARK: - Camera
 
-    /// Fit all content (or the locked background) into the view.
+    /// Reset the camera to 1:1 with no offset (used by frozen mode so the screenshot fills exactly).
+    func resetCamera() {
+        scene.zoom = 1; scene.scrollX = 0; scene.scrollY = 0; needsDisplay = true
+    }
+
     func recenter() {
         let target = scene.elements.first(where: { $0.locked })?.bounds ?? scene.contentBounds()
-        guard let b = target, b.width > 0, b.height > 0 else {
-            scene.scrollX = 0; scene.scrollY = 0; scene.zoom = 1; needsDisplay = true; return
-        }
+        guard let b = target, b.width > 0, b.height > 0 else { resetCamera(); return }
         let margin: CGFloat = 40
         let sx = (bounds.width - margin * 2) / b.width
         let sy = (bounds.height - margin * 2) / b.height
@@ -366,6 +644,10 @@ final class CanvasView: NSView {
     }
 
     private func updateCursor() {
-        (tool == .select ? NSCursor.arrow : NSCursor.crosshair).set()
+        switch tool {
+        case .select: NSCursor.arrow.set()
+        case .hand: NSCursor.openHand.set()
+        default: NSCursor.crosshair.set()
+        }
     }
 }
