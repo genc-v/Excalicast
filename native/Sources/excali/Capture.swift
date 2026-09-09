@@ -3,26 +3,13 @@ import CoreGraphics
 import ScreenCaptureKit
 
 struct CaptureResult {
-    let dataUrl: String
+    let image: CGImage // raw capture — shown immediately; encoded to a dataURL lazily for saving
     let widthPx: Int
     let heightPx: Int
     let scaleFactor: Double
     let logicalW: Double
     let logicalH: Double
     let looksBlack: Bool
-
-    /// JSON-serializable dictionary for the WKWebView reply (camelCase to match the TS interface).
-    var dict: [String: Any] {
-        [
-            "dataUrl": dataUrl,
-            "widthPx": widthPx,
-            "heightPx": heightPx,
-            "scaleFactor": scaleFactor,
-            "logicalW": logicalW,
-            "logicalH": logicalH,
-            "looksBlack": looksBlack,
-        ]
-    }
 }
 
 enum Capture {
@@ -91,14 +78,9 @@ enum Capture {
             contentFilter: filter, configuration: config
         )
 
-        let rep = NSBitmapImageRep(cgImage: cgImage)
-        guard let png = rep.representation(using: .png, properties: [:]) else {
-            throw NSError(domain: "excali", code: 2, userInfo: [NSLocalizedDescriptionKey: "png encode failed"])
-        }
-        let dataUrl = "data:image/png;base64," + png.base64EncodedString()
-
+        // Return the raw image — no PNG/base64 encode here, so the overlay can show immediately.
         return CaptureResult(
-            dataUrl: dataUrl,
+            image: cgImage,
             widthPx: cgImage.width,
             heightPx: cgImage.height,
             scaleFactor: scale,

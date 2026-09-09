@@ -149,12 +149,11 @@ final class OverlayController: NSObject {
         }
 
         Task { @MainActor in
-            guard let cap = try? await Capture.captureUnderCursor(),
-                  let img = ExcalidrawIO.decodeDataURL(cap.dataUrl) else { return }
+            guard let cap = try? await Capture.captureUnderCursor() else { return }
+            let img = cap.image
             loadBlank()
             let fileId = "snapshot-\(img.width)x\(img.height)"
             canvas.images[fileId] = img
-            canvas.imageDataURLs[fileId] = cap.dataUrl // reuse instead of re-encoding on save
             var bg = Element(kind: .image)
             bg.x = 0; bg.y = 0; bg.width = cap.logicalW; bg.height = cap.logicalH
             bg.locked = true; bg.fileId = fileId
@@ -162,6 +161,12 @@ final class OverlayController: NSObject {
             mode = .frozen
             showOverlay(widthPx: cap.widthPx, heightPx: cap.heightPx)
             canvas.resetCamera() // screenshot fills the screen exactly at 1:1
+
+            // Encode the dataURL for saving off the main thread — it isn't needed to display.
+            DispatchQueue.global(qos: .utility).async { [weak canvas] in
+                guard let url = ExcalidrawIO.pngDataURL(img) else { return }
+                DispatchQueue.main.async { canvas?.imageDataURLs[fileId] = url }
+            }
         }
     }
 
@@ -269,7 +274,8 @@ final class OverlayController: NSObject {
             if let doc = ExcalidrawIO.fileData(scene, images: images, dataURLs: dataURLs) {
                 try? doc.write(to: URL(fileURLWithPath: base + ".excalidraw"))
             }
-            if includePNG, let png = ExcalidrawIO.exportPNG(scene, images: images) {
+            // Small preview for the gallery — full-fidelity data lives in the .excalidraw.
+            if includePNG, let png = ExcalidrawIO.exportPNG(scene, images: images, maxDimension: 1400) {
                 try? png.write(to: URL(fileURLWithPath: base + ".png"))
             }
             SavedDocuments.prune()

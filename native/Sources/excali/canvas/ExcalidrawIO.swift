@@ -168,12 +168,19 @@ enum ExcalidrawIO {
     // MARK: - PNG
 
     /// Render the scene to PNG bytes. Frames the locked background if present (frozen mode), else all
-    /// content. Returns nil if there's nothing to export.
-    static func exportPNG(_ scene: Scene, images: [String: CGImage], scale: CGFloat = 2) -> Data? {
+    /// content. `maxDimension` caps the output long side (used for the small gallery preview).
+    /// Returns nil if there's nothing to export.
+    static func exportPNG(_ scene: Scene, images: [String: CGImage], scale: CGFloat = 2,
+                          maxDimension: CGFloat? = nil) -> Data? {
         let hasLocked = scene.elements.contains { $0.locked && $0.kind == .image }
         let frame = scene.elements.first(where: { $0.locked })?.bounds ?? scene.contentBounds()
         guard let b = frame, b.width >= 1, b.height >= 1 else { return nil }
 
+        var scale = scale
+        if let maxD = maxDimension {
+            let longSide = max(b.width, b.height) * scale
+            if longSide > maxD { scale *= maxD / longSide }
+        }
         let w = Int((b.width * scale).rounded()), h = Int((b.height * scale).rounded())
         guard w > 0, h > 0,
               let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
