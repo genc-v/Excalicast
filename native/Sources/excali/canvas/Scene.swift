@@ -37,7 +37,7 @@ struct Scene {
 final class History {
     private var undoStack: [[Element]] = []
     private var redoStack: [[Element]] = []
-    private let limit = 200
+    private let limit = 80
 
     /// Record the current state *before* a mutation.
     func commit(_ elements: [Element]) {

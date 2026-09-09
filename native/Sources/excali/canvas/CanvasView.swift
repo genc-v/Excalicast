@@ -16,6 +16,7 @@ final class CanvasView: NSView {
     let history = History()
     var tool: Tool = .select { didSet { updateCursor(); onToolChange?(tool) } }
     var onToolChange: ((Tool) -> Void)?
+    var onZoomChange: ((CGFloat) -> Void)? // reports zoom (1 = 100%) for the on-screen indicator
 
     // Current style applied to newly-created elements.
     var strokeColor = "#1e1e1e"
@@ -24,6 +25,8 @@ final class CanvasView: NSView {
 
     var selection: Set<String> = []
     var images: [String: CGImage] = [:] // fileId -> decoded bitmap (locked screenshot background)
+    var imageDataURLs: [String: String] = [:] // fileId -> original PNG dataURL, cached to avoid
+                                               // re-encoding the full-res screenshot on every save
 
     // Text editing overlay state (see TextEditing.swift).
     var editingTextView: CanvasTextView?
@@ -616,7 +619,7 @@ final class CanvasView: NSView {
             case "d": duplicateSelection(); return
             case "=", "+": zoomStep(1.1); return
             case "-", "_": zoomStep(1 / 1.1); return
-            case "0": scene.zoom = 1; needsDisplay = true; return
+            case "0": resetZoom(); return
             default: return
             }
         }
@@ -726,12 +729,17 @@ final class CanvasView: NSView {
 
     private func zoomStep(_ f: CGFloat) { zoom(by: f, at: CGPoint(x: bounds.midX, y: bounds.midY)) }
 
+    func zoomIn() { zoomStep(1.1) }
+    func zoomOut() { zoomStep(1 / 1.1) }
+    func resetZoom() { zoom(by: 1 / scene.zoom, at: CGPoint(x: bounds.midX, y: bounds.midY)) }
+
     func zoom(by factor: CGFloat, at screenPoint: CGPoint) {
         let before = scene.toWorld(screenPoint)
         scene.zoom = max(0.1, min(30, scene.zoom * factor))
         let after = scene.toWorld(screenPoint)
         scene.scrollX += after.x - before.x
         scene.scrollY += after.y - before.y
+        onZoomChange?(scene.zoom)
         needsDisplay = true
     }
 
@@ -739,7 +747,8 @@ final class CanvasView: NSView {
 
     /// Reset the camera to 1:1 with no offset (used by frozen mode so the screenshot fills exactly).
     func resetCamera() {
-        scene.zoom = 1; scene.scrollX = 0; scene.scrollY = 0; needsDisplay = true
+        scene.zoom = 1; scene.scrollX = 0; scene.scrollY = 0
+        onZoomChange?(scene.zoom); needsDisplay = true
     }
 
     /// Reset to 100% zoom and center the content (or the locked screenshot) in the view.
@@ -752,7 +761,7 @@ final class CanvasView: NSView {
         } else {
             scene.scrollX = 0; scene.scrollY = 0
         }
-        needsDisplay = true
+        onZoomChange?(scene.zoom); needsDisplay = true
     }
 
     /// Zoom so all content fits the viewport (Excalidraw's Shift+1). May zoom in or out.
@@ -765,7 +774,7 @@ final class CanvasView: NSView {
         scene.zoom = max(0.1, min(4, min(sx, sy)))
         scene.scrollX = (bounds.width / scene.zoom - b.width) / 2 - b.minX
         scene.scrollY = (bounds.height / scene.zoom - b.height) / 2 - b.minY
-        needsDisplay = true
+        onZoomChange?(scene.zoom); needsDisplay = true
     }
 
     private func updateCursor() {

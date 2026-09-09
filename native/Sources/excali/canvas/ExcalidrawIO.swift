@@ -8,7 +8,8 @@ import Foundation
 enum ExcalidrawIO {
     // MARK: - Write
 
-    static func fileData(_ scene: Scene, images: [String: CGImage]) -> Data? {
+    static func fileData(_ scene: Scene, images: [String: CGImage],
+                         dataURLs: [String: String] = [:]) -> Data? {
         var elementDicts: [[String: Any]] = []
         var files: [String: Any] = [:]
         var kindOf: [String: ElementKind] = [:]
@@ -16,12 +17,15 @@ enum ExcalidrawIO {
 
         for el in scene.elements {
             elementDicts.append(elementDict(el, kindOf: kindOf))
-            if el.kind == .image, let fid = el.fileId, let img = images[fid],
-               let dataURL = pngDataURL(img) {
-                files[fid] = [
-                    "mimeType": "image/png", "id": fid, "dataURL": dataURL,
-                    "created": 0, "lastRetrieved": 0,
-                ]
+            if el.kind == .image, let fid = el.fileId {
+                // Prefer the cached dataURL (from capture/open) so we don't re-encode a full-res
+                // screenshot on every save; only fall back to encoding if we somehow lack it.
+                if let dataURL = dataURLs[fid] ?? images[fid].flatMap(pngDataURL) {
+                    files[fid] = [
+                        "mimeType": "image/png", "id": fid, "dataURL": dataURL,
+                        "created": 0, "lastRetrieved": 0,
+                    ]
+                }
             }
         }
 
@@ -100,17 +104,19 @@ enum ExcalidrawIO {
 
     // MARK: - Read
 
-    /// Parse a document into (elements, decoded images). Unknown element kinds are skipped.
-    static func parse(_ data: Data) -> (elements: [Element], images: [String: CGImage]) {
+    /// Parse a document into (elements, decoded images, original dataURLs). Unknown kinds are skipped.
+    static func parse(_ data: Data) -> (elements: [Element], images: [String: CGImage], dataURLs: [String: String]) {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return ([], [:])
+            return ([], [:], [:])
         }
         var images: [String: CGImage] = [:]
+        var dataURLs: [String: String] = [:]
         if let files = root["files"] as? [String: Any] {
             for (fid, v) in files {
                 if let f = v as? [String: Any], let url = f["dataURL"] as? String,
                    let img = decodeDataURL(url) {
                     images[fid] = img
+                    dataURLs[fid] = url
                 }
             }
         }
@@ -118,7 +124,7 @@ enum ExcalidrawIO {
         for raw in (root["elements"] as? [[String: Any]] ?? []) {
             if let el = element(from: raw) { out.append(el) }
         }
-        return (out, images)
+        return (out, images, dataURLs)
     }
 
     private static func element(from d: [String: Any]) -> Element? {

@@ -17,6 +17,7 @@ final class OverlayController: NSObject {
     let panel: OverlayPanel
     private let canvas = CanvasView(frame: .zero)
     private let toolbar = ToolbarView()
+    private let zoomControl = ZoomControlView()
 
     private var mode: Mode = .idle
     private var currentPath: String?
@@ -47,6 +48,7 @@ final class OverlayController: NSObject {
         canvas.onChange = { [weak self] in self?.scheduleAutosave() }
         canvas.onDismiss = { [weak self] in self?.dismiss() }
         canvas.onToolChange = { [weak self] tool in self?.toolbar.highlight(tool) }
+        canvas.onZoomChange = { [weak self] z in self?.zoomControl.setZoom(z) }
 
         let container = NSView(frame: canvas.bounds)
         container.autoresizingMask = [.width, .height]
@@ -60,9 +62,18 @@ final class OverlayController: NSObject {
         }
         toolbar.onAction = { [weak self] name in self?.handleToolbarAction(name) }
         container.addSubview(toolbar)
+
+        zoomControl.translatesAutoresizingMaskIntoConstraints = false
+        zoomControl.onZoomIn = { [weak self] in self?.canvas.zoomIn() }
+        zoomControl.onZoomOut = { [weak self] in self?.canvas.zoomOut() }
+        zoomControl.onReset = { [weak self] in self?.canvas.resetZoom() }
+        container.addSubview(zoomControl)
+
         NSLayoutConstraint.activate([
             toolbar.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             toolbar.topAnchor.constraint(equalTo: container.topAnchor, constant: 14),
+            zoomControl.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            zoomControl.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16),
         ])
 
         panel.contentView = container
@@ -93,10 +104,11 @@ final class OverlayController: NSObject {
     }
 
     func openFile(path: String) {
-        autosaveNow()
+        saveDocument(includePNG: true)
         guard let data = FileManager.default.contents(atPath: path) else { return }
         let parsed = ExcalidrawIO.parse(data)
         canvas.images = parsed.images
+        canvas.imageDataURLs = parsed.dataURLs
         applyTheme()
         canvas.scene.elements = parsed.elements
         canvas.selection.removeAll()
@@ -118,7 +130,7 @@ final class OverlayController: NSObject {
 
     private func startWhiteboard() {
         if mode == .whiteboard { dismiss(); return }
-        autosaveNow()
+        saveDocument(includePNG: true)
         loadBlank()
         mode = .whiteboard
         showOverlay(forScreenUnderCursor: true)
@@ -126,7 +138,7 @@ final class OverlayController: NSObject {
 
     private func startFrozen() {
         if mode == .frozen { dismiss(); return }
-        autosaveNow()
+        saveDocument(includePNG: true)
 
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
@@ -142,6 +154,7 @@ final class OverlayController: NSObject {
             loadBlank()
             let fileId = "snapshot-\(img.width)x\(img.height)"
             canvas.images[fileId] = img
+            canvas.imageDataURLs[fileId] = cap.dataUrl // reuse instead of re-encoding on save
             var bg = Element(kind: .image)
             bg.x = 0; bg.y = 0; bg.width = cap.logicalW; bg.height = cap.logicalH
             bg.locked = true; bg.fileId = fileId
@@ -155,6 +168,8 @@ final class OverlayController: NSObject {
     private func loadBlank() {
         applyTheme()
         canvas.scene.elements = []
+        canvas.images.removeAll()
+        canvas.imageDataURLs.removeAll()
         canvas.scene.scrollX = 0; canvas.scene.scrollY = 0; canvas.scene.zoom = 1
         canvas.selection.removeAll()
         canvas.history.clear()
@@ -165,12 +180,13 @@ final class OverlayController: NSObject {
 
     private func dismiss() {
         canvas.commitTextEditing()
-        autosaveNow()
+        saveDocument(includePNG: true) // regenerate the gallery thumbnail on the way out
         saveTimer?.invalidate()
         mode = .idle
         currentPath = nil
         canvas.scene.elements = []
         canvas.images.removeAll()
+        canvas.imageDataURLs.removeAll()
         canvas.selection.removeAll()
         panel.orderOut(nil)
     }
@@ -198,7 +214,7 @@ final class OverlayController: NSObject {
 
     private func saveNow() {
         canvas.commitTextEditing()
-        autosaveNow()
+        saveDocument(includePNG: true)
     }
 
     // MARK: - Theme / settings
@@ -220,18 +236,22 @@ final class OverlayController: NSObject {
 
     private func scheduleAutosave() {
         saveTimer?.invalidate()
-        saveTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { [weak self] _ in
-            self?.autosaveNow()
+        // During active editing, persist only the tiny vector .excalidraw — the (expensive, full-res)
+        // .png thumbnail is regenerated only on dismiss/save/copy.
+        saveTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { [weak self] _ in
+            self?.saveDocument(includePNG: false)
         }
     }
 
     private func hasUserContent() -> Bool { canvas.scene.elements.contains { !$0.locked } }
 
-    private func autosaveNow() {
+    /// Write the document. The `.excalidraw` (vector, cheap — screenshot dataURL is cached, not
+    /// re-encoded) is always written; the `.png` (gallery thumbnail / shared image) only when asked.
+    private func saveDocument(includePNG: Bool) {
         saveTimer?.invalidate()
         guard mode != .idle, hasUserContent(),
-              let doc = ExcalidrawIO.fileData(canvas.scene, images: canvas.images),
-              let png = ExcalidrawIO.exportPNG(canvas.scene, images: canvas.images)
+              let doc = ExcalidrawIO.fileData(canvas.scene, images: canvas.images,
+                                              dataURLs: canvas.imageDataURLs)
         else { return }
 
         let base: String
@@ -244,7 +264,9 @@ final class OverlayController: NSObject {
             currentPath = base + ".excalidraw"
         }
         try? doc.write(to: URL(fileURLWithPath: base + ".excalidraw"))
-        try? png.write(to: URL(fileURLWithPath: base + ".png"))
+        if includePNG, let png = ExcalidrawIO.exportPNG(canvas.scene, images: canvas.images) {
+            try? png.write(to: URL(fileURLWithPath: base + ".png"))
+        }
         SavedDocuments.prune()
     }
 
