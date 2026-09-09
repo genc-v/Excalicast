@@ -245,17 +245,22 @@ final class CanvasView: NSView {
             }
         }
 
-        // Double-click: edit or add bound text.
+        // Double-click: edit text, add a bound label to a shape/line, or start free text on empty
+        // canvas.
         if event.clickCount == 2 {
             let tol = 6 / scene.zoom
             if let hit = HitTest.topmost(scene.elements, w, tolerance: tol) {
                 if hit.kind == .text {
                     beginTextEditing(at: CGPoint(x: hit.x, y: hit.y), existing: hit)
+                } else if hit.kind == .freedraw {
+                    beginTextEditing(at: w, existing: nil) // don't bind labels to pen strokes
                 } else {
                     editOrCreateBoundText(container: hit)
                 }
-                return true
+            } else {
+                beginTextEditing(at: w, existing: nil)
             }
+            return true
         }
 
         beginSelectOrMove(at: w, event: event)
@@ -362,9 +367,9 @@ final class CanvasView: NSView {
         let r = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
         if !additive { selection.removeAll() }
         for el in scene.elements where !el.locked && el.containerId == nil {
-            // Lines/arrows require the marquee to actually cross the path (their bounding box is a
-            // huge diagonal). A pen stroke is a compact blob, so it selects as one block by bounds.
-            let hit = el.isLinear ? HitTest.rectIntersectsLinear(r, el) : r.intersects(el.bounds)
+            // Point-based strokes (lines/arrows/pen) select only when the marquee actually crosses
+            // the stroke — not just its (often huge) bounding box.
+            let hit = el.usesPoints ? HitTest.rectIntersectsLinear(r, el) : r.intersects(el.bounds)
             if hit { selection.insert(el.id) }
         }
     }
