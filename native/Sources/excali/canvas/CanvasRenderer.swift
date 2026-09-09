@@ -75,6 +75,8 @@ enum CanvasRenderer {
             }
         case .line, .arrow:
             drawLinear(el, in: ctx, scene: scene)
+        case .freedraw:
+            drawFreedraw(el, in: ctx, scene: scene)
         case .image:
             if let fileId = el.fileId, let img = images[fileId] {
                 let r = screenRect(el.bounds, scene)
@@ -147,6 +149,35 @@ enum CanvasRenderer {
             let headSize = (12 + el.strokeWidth * 2) * scene.zoom
             drawArrowhead(from: pts[pts.count - 2], to: pts[pts.count - 1], size: headSize, in: ctx)
         }
+    }
+
+    /// A freehand pen stroke: a smoothed path through all sampled points, round caps/joins.
+    private static func drawFreedraw(_ el: Element, in ctx: CGContext, scene: Scene) {
+        let pts = el.points.map { scene.toScreen(CGPoint(x: el.x + $0.x, y: el.y + $0.y)) }
+        guard let stroke = Element.rgba(el.strokeColor) else { return }
+        ctx.setStrokeColor(red: stroke.r, green: stroke.g, blue: stroke.b, alpha: stroke.a)
+        ctx.setLineCap(.round); ctx.setLineJoin(.round)
+
+        if pts.count < 2 {
+            // A single tap = a dot.
+            if let p = pts.first {
+                ctx.setFillColor(red: stroke.r, green: stroke.g, blue: stroke.b, alpha: stroke.a)
+                let r = max(1, el.strokeWidth * scene.zoom) / 2
+                ctx.fillEllipse(in: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2))
+            }
+            return
+        }
+        ctx.beginPath()
+        ctx.move(to: pts[0])
+        for i in 0..<(pts.count - 1) {
+            let p0 = i > 0 ? pts[i - 1] : pts[i]
+            let p1 = pts[i], p2 = pts[i + 1]
+            let p3 = i + 2 < pts.count ? pts[i + 2] : pts[i + 1]
+            let c1 = CGPoint(x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6)
+            let c2 = CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6)
+            ctx.addCurve(to: p2, control1: c1, control2: c2)
+        }
+        ctx.strokePath()
     }
 
     private static func drawArrowhead(from a: CGPoint, to b: CGPoint, size: CGFloat, in ctx: CGContext) {

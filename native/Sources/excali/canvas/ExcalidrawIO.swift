@@ -73,13 +73,19 @@ enum ExcalidrawIO {
             "link": NSNull(),
             "locked": el.locked,
         ]
-        if el.isLinear {
+        if el.usesPoints {
             d["points"] = el.points.map { [$0.x, $0.y] }
             d["lastCommittedPoint"] = NSNull()
+        }
+        if el.isLinear {
             d["startArrowhead"] = el.startArrowhead as Any? ?? NSNull()
             d["endArrowhead"] = el.endArrowhead as Any? ?? NSNull()
             d["startBinding"] = bindingDict(el.startBinding)
             d["endBinding"] = bindingDict(el.endBinding)
+        }
+        if el.kind == .freedraw {
+            d["pressures"] = [Double]()
+            d["simulatePressure"] = true
         }
         if el.kind == .text {
             d["text"] = el.text

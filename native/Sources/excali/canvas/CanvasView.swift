@@ -3,7 +3,7 @@ import CoreGraphics
 
 /// The tools a user can pick. `select` manipulates existing elements, `hand` pans, the rest create.
 enum Tool: String {
-    case select, hand, rectangle, ellipse, diamond, line, arrow, text
+    case select, hand, rectangle, ellipse, diamond, line, arrow, text, pen
 }
 
 /// The eight resize handles around a shape's bounding box.
@@ -126,8 +126,8 @@ final class CanvasView: NSView {
                 ctx.stroke(r)
             }
         }
-        // Resize handles only for a single non-linear, unlocked shape.
-        if let el = single, !el.isLinear, !el.locked, el.kind != .text {
+        // Resize handles only for a single unlocked shape (not lines, freedraw, or text).
+        if let el = single, !el.usesPoints, !el.locked, el.kind != .text {
             for (_, p) in resizeHandlePoints(el) { drawHandle(p, in: ctx, filled: true) }
         }
 
@@ -207,6 +207,8 @@ final class CanvasView: NSView {
             beginCreateShape(at: w)
         case .line, .arrow:
             beginCreateLinear(at: w)
+        case .pen:
+            beginCreateFreedraw(at: w)
         case .text:
             beginTextEditing(at: w, existing: nil)
         case .hand:
@@ -230,7 +232,7 @@ final class CanvasView: NSView {
                 for (i, m) in mids.enumerated() where near(screen, m, radius: handlePx) {
                     drag = .pendingBend(id: el.id, segment: i); return true
                 }
-            } else if !el.locked, el.kind != .text {
+            } else if !el.usesPoints, !el.locked, el.kind != .text {
                 for (handle, p) in resizeHandlePoints(el) where near(screen, p, radius: handlePx + 3) {
                     history.commit(scene.elements)
                     drag = .resizing(id: el.id, handle: handle, orig: el.bounds); return true
@@ -355,9 +357,9 @@ final class CanvasView: NSView {
         let r = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
         if !additive { selection.removeAll() }
         for el in scene.elements where !el.locked && el.containerId == nil {
-            // For lines/arrows, require the marquee to actually cross the path — not just overlap the
-            // (often huge) diagonal bounding box.
-            let hit = el.isLinear ? HitTest.rectIntersectsLinear(r, el) : r.intersects(el.bounds)
+            // For point-based strokes, require the marquee to actually cross the path — not just
+            // overlap the (often huge) diagonal bounding box.
+            let hit = el.usesPoints ? HitTest.rectIntersectsLinear(r, el) : r.intersects(el.bounds)
             if hit { selection.insert(el.id) }
         }
     }
@@ -441,8 +443,26 @@ final class CanvasView: NSView {
         drag = .creating(id: el.id)
     }
 
+    private func beginCreateFreedraw(at w: CGPoint) {
+        history.commit(scene.elements)
+        var el = Element(kind: .freedraw)
+        el.x = w.x; el.y = w.y
+        el.points = [CGPoint(x: 0, y: 0)]
+        applyStyle(&el)
+        scene.elements.append(el)
+        selection = [el.id]
+        drag = .creating(id: el.id)
+    }
+
     private func updateCreating(id: String, to w: CGPoint, shift: Bool) {
         guard let i = scene.index(of: id) else { return }
+        if scene.elements[i].kind == .freedraw {
+            // Append each sampled point (relative to the element origin) to trace the stroke.
+            scene.elements[i].points.append(CGPoint(x: w.x - scene.elements[i].x,
+                                                    y: w.y - scene.elements[i].y))
+            needsDisplay = true
+            return
+        }
         if scene.elements[i].isLinear {
             var end = w
             if shift { end = snap45(from: CGPoint(x: scene.elements[i].x, y: scene.elements[i].y), to: w) }
@@ -462,6 +482,15 @@ final class CanvasView: NSView {
     private func finishCreating(id: String) {
         guard let i = scene.index(of: id) else { return }
         var el = scene.elements[i]
+        if el.kind == .freedraw {
+            if el.points.count < 2 { // a click makes a dot
+                el.points.append(CGPoint(x: el.points[0].x + 0.5, y: el.points[0].y + 0.5))
+            }
+            scene.elements[i] = el
+            normalizeLinear(&scene.elements[i])
+            onChange?()
+            return // keep the pen active for continuous drawing
+        }
         if el.isLinear {
             if hypot(el.points[1].x, el.points[1].y) < 3 {
                 scene.elements.remove(at: i); selection.removeAll(); return
@@ -634,6 +663,7 @@ final class CanvasView: NSView {
         case "o", "4": tool = .ellipse
         case "a", "5": tool = .arrow
         case "l", "6": tool = .line
+        case "p", "7": tool = .pen
         case "t", "8": tool = .text
         default: super.keyDown(with: event)
         }

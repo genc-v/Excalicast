@@ -34,7 +34,7 @@ enum HitTest {
             let nx = abs(p.x - b.midX) / (b.width / 2)
             let ny = abs(p.y - b.midY) / (b.height / 2)
             return nx + ny <= 1
-        case .line, .arrow:
+        case .line, .arrow, .freedraw:
             let pts = el.points.map { CGPoint(x: el.x + $0.x, y: el.y + $0.y) }
             guard pts.count >= 2 else { return false }
             for i in 0..<(pts.count - 1) {

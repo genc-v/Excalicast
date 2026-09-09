@@ -15,6 +15,7 @@ final class ToolbarView: NSView {
         (.ellipse, "circle", "Ellipse (O)"),
         (.arrow, "arrow.up.right", "Arrow (A)"),
         (.line, "line.diagonal", "Line (L)"),
+        (.pen, "pencil.tip", "Pen (P)"),
         (.text, "textformat", "Text (T)"),
     ]
     private static let actions: [(String, String, String)] = [

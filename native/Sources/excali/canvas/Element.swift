@@ -4,7 +4,7 @@ import Foundation
 /// The kinds of elements the native canvas supports. Matches the `type` string in the
 /// `.excalidraw` file format so documents round-trip with the real Excalidraw app.
 enum ElementKind: String, Codable {
-    case rectangle, ellipse, diamond, line, arrow, text, image
+    case rectangle, ellipse, diamond, line, arrow, text, image, freedraw
 }
 
 /// A binding from an arrow endpoint to a shape. `focus`/`gap` mirror Excalidraw's model so files
@@ -60,9 +60,9 @@ struct Element: Identifiable, Equatable {
     var fileId: String?
     var locked: Bool = false
 
-    /// Axis-aligned bounds in world space. For line/arrow this is derived from `points`.
+    /// Axis-aligned bounds in world space. For point-based kinds this is derived from `points`.
     var bounds: CGRect {
-        if kind == .line || kind == .arrow, !points.isEmpty {
+        if usesPoints, !points.isEmpty {
             let xs = points.map { x + $0.x }
             let ys = points.map { y + $0.y }
             let minX = xs.min() ?? x, maxX = xs.max() ?? x
@@ -76,6 +76,8 @@ struct Element: Identifiable, Equatable {
     var center: CGPoint { let b = bounds; return CGPoint(x: b.midX, y: b.midY) }
 
     var isLinear: Bool { kind == .line || kind == .arrow }
+    /// Kinds whose geometry is a list of `points` (relative to x,y).
+    var usesPoints: Bool { kind == .line || kind == .arrow || kind == .freedraw }
 
     /// A short unique id (nanoid-ish) compatible with Excalidraw's string ids.
     static func newId() -> String {
