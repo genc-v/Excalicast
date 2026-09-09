@@ -34,6 +34,7 @@ final class CanvasView: NSView {
 
     private var spaceHeld = false
     private var clipboard: [Element] = []
+    private var multiPointId: String? // a line/arrow being built by clicking points one at a time
 
     private let handlePx: CGFloat = 5 // half-size of a resize/point handle, in screen points
 
@@ -62,6 +63,14 @@ final class CanvasView: NSView {
         wantsLayer = true
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds,
+                                       options: [.activeInKeyWindow, .mouseMoved, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
 
     // MARK: - Rendering
 
@@ -162,6 +171,13 @@ final class CanvasView: NSView {
         let w = worldPoint(event)
         let screen = convert(event.locationInWindow, from: nil)
 
+        // Building a multi-point line/arrow by clicking: each click fixes a vertex; a double-click
+        // finishes.
+        if multiPointId != nil {
+            if event.clickCount >= 2 { finishMultiPoint() } else { addMultiPointVertex(at: w) }
+            return
+        }
+
         if spaceHeld || tool == .hand || event.modifierFlags.contains(.option) {
             drag = .panning(lastScreen: screen); return
         }
@@ -252,9 +268,30 @@ final class CanvasView: NSView {
         }
     }
 
+    override func mouseMoved(with event: NSEvent) {
+        guard let id = multiPointId, let i = scene.index(of: id),
+              let last = scene.elements[i].points.indices.last else { return }
+        var end = worldPoint(event)
+        if event.modifierFlags.contains(.shift), scene.elements[i].points.count >= 2 {
+            let prev = scene.elements[i].points[last - 1]
+            let base = CGPoint(x: scene.elements[i].x + prev.x, y: scene.elements[i].y + prev.y)
+            end = snap45(from: base, to: end)
+        }
+        scene.elements[i].points[last] = CGPoint(x: end.x - scene.elements[i].x,
+                                                 y: end.y - scene.elements[i].y)
+        needsDisplay = true
+    }
+
     override func mouseUp(with event: NSEvent) {
         switch drag {
-        case .creating(let id): finishCreating(id: id)
+        case .creating(let id):
+            // A click (no meaningful drag) on the line/arrow tool begins multi-point mode instead
+            // of finishing a 2-point line.
+            if let el = scene.element(id: id), el.isLinear,
+               hypot(el.points.last?.x ?? 0, el.points.last?.y ?? 0) < 6 {
+                beginMultiPoint(id: id); drag = .none; needsDisplay = true; return
+            }
+            finishCreating(id: id)
         case .marquee(let start, let current):
             commitMarquee(from: start, to: current, additive: event.modifierFlags.contains(.shift))
         case .moving: onChange?()
@@ -414,6 +451,44 @@ final class CanvasView: NSView {
         onChange?()
     }
 
+    // MARK: - Multi-point (click-to-place) line/arrow
+
+    private func beginMultiPoint(id: String) {
+        multiPointId = id
+        window?.acceptsMouseMovedEvents = true
+        // points is [start, floating]; the floating last point now follows the cursor via mouseMoved.
+        needsDisplay = true
+    }
+
+    private func addMultiPointVertex(at w: CGPoint) {
+        guard let mp = multiPointId, let i = scene.index(of: mp) else { return }
+        let rel = CGPoint(x: w.x - scene.elements[i].x, y: w.y - scene.elements[i].y)
+        // Fix the floating point here, then append a new floating point to keep going.
+        if let last = scene.elements[i].points.indices.last {
+            scene.elements[i].points[last] = rel
+        }
+        scene.elements[i].points.append(rel)
+        needsDisplay = true
+    }
+
+    func finishMultiPoint() {
+        defer { multiPointId = nil; window?.acceptsMouseMovedEvents = false }
+        guard let mp = multiPointId, let i = scene.index(of: mp) else { return }
+        // Drop the trailing floating point.
+        if scene.elements[i].points.count > 2 { scene.elements[i].points.removeLast() }
+        // Degenerate (single real segment with no length) → discard.
+        if scene.elements[i].points.count < 2 ||
+            (scene.elements[i].bounds.width < 3 && scene.elements[i].bounds.height < 3) {
+            scene.elements.remove(at: i); selection.removeAll()
+        } else {
+            normalizeLinear(&scene.elements[i])
+            rebindLinear(id: mp)
+        }
+        tool = .select
+        onChange?()
+        needsDisplay = true
+    }
+
     private func toolKind() -> ElementKind {
         switch tool {
         case .rectangle: return .rectangle
@@ -488,6 +563,11 @@ final class CanvasView: NSView {
         let cmd = event.modifierFlags.contains(.command)
         let shift = event.modifierFlags.contains(.shift)
         let chars = (event.charactersIgnoringModifiers ?? "").lowercased()
+
+        // Finishing a multi-point line takes priority over other keys.
+        if multiPointId != nil, event.keyCode == 53 || event.keyCode == 36 { // Esc / Return
+            finishMultiPoint(); return
+        }
 
         switch event.keyCode {
         case 53: // Esc

@@ -94,7 +94,20 @@ enum CanvasRenderer {
 
         ctx.beginPath()
         ctx.move(to: pts[0])
-        for p in pts.dropFirst() { ctx.addLine(to: p) }
+        if pts.count == 2 {
+            ctx.addLine(to: pts[1])
+        } else {
+            // Smooth the polyline with a Catmull-Rom spline (converted to cubic béziers).
+            for i in 0..<(pts.count - 1) {
+                let p0 = i > 0 ? pts[i - 1] : pts[i]
+                let p1 = pts[i]
+                let p2 = pts[i + 1]
+                let p3 = i + 2 < pts.count ? pts[i + 2] : pts[i + 1]
+                let c1 = CGPoint(x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6)
+                let c2 = CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6)
+                ctx.addCurve(to: p2, control1: c1, control2: c2)
+            }
+        }
         ctx.strokePath()
 
         if el.kind == .arrow {
