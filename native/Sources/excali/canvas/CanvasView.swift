@@ -45,6 +45,9 @@ final class CanvasView: NSView {
         case panning(lastScreen: CGPoint)
         case resizing(id: String, handle: ResizeHandle, orig: CGRect)
         case draggingPoint(id: String, index: Int)
+        // A midpoint grab that only becomes a bend once the user actually drags — a plain click
+        // never adds a point.
+        case pendingBend(id: String, segment: Int)
     }
     private var drag: Drag = .none
 
@@ -147,8 +150,8 @@ final class CanvasView: NSView {
         ]
     }
 
-    private func near(_ a: CGPoint, _ b: CGPoint) -> Bool {
-        abs(a.x - b.x) <= handlePx + 2 && abs(a.y - b.y) <= handlePx + 2
+    private func near(_ a: CGPoint, _ b: CGPoint, radius: CGFloat) -> Bool {
+        abs(a.x - b.x) <= radius && abs(a.y - b.y) <= radius
     }
 
     // MARK: - Mouse
@@ -184,16 +187,17 @@ final class CanvasView: NSView {
         if selection.count == 1, let el = scene.element(id: selection.first!) {
             if el.isLinear {
                 let pts = el.points.map { scene.toScreen(CGPoint(x: el.x + $0.x, y: el.y + $0.y)) }
-                for (i, p) in pts.enumerated() where near(screen, p) {
+                // Endpoints/real vertices win first (slightly larger target).
+                for (i, p) in pts.enumerated() where near(screen, p, radius: handlePx + 3) {
                     history.commit(scene.elements); drag = .draggingPoint(id: el.id, index: i); return true
                 }
+                // Bend midpoints: tight target, and deferred until an actual drag (see pendingBend).
                 let mids = midpoints(pts)
-                for (i, m) in mids.enumerated() where near(screen, m) {
-                    history.commit(scene.elements); insertBendPoint(id: el.id, afterSegment: i, at: w)
-                    drag = .draggingPoint(id: el.id, index: i + 1); return true
+                for (i, m) in mids.enumerated() where near(screen, m, radius: handlePx) {
+                    drag = .pendingBend(id: el.id, segment: i); return true
                 }
             } else if !el.locked, el.kind != .text {
-                for (handle, p) in resizeHandlePoints(el) where near(screen, p) {
+                for (handle, p) in resizeHandlePoints(el) where near(screen, p, radius: handlePx + 3) {
                     history.commit(scene.elements)
                     drag = .resizing(id: el.id, handle: handle, orig: el.bounds); return true
                 }
@@ -237,6 +241,12 @@ final class CanvasView: NSView {
             resizeElement(id: id, handle: handle, orig: orig, to: w, shift: shift)
         case .draggingPoint(let id, let index):
             movePoint(id: id, index: index, to: w, shift: shift)
+        case .pendingBend(let id, let segment):
+            // First real drag: now insert the bend point and start dragging it.
+            history.commit(scene.elements)
+            insertBendPoint(id: id, afterSegment: segment, at: w)
+            drag = .draggingPoint(id: id, index: segment + 1)
+            movePoint(id: id, index: segment + 1, to: w, shift: shift)
         case .none:
             break
         }
