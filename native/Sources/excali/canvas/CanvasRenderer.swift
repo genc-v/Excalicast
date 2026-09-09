@@ -42,7 +42,7 @@ enum CanvasRenderer {
         // Grid contrasts with the canvas: light lines on a dark canvas, dark on a light one.
         let dark = (Element.rgba(scene.backgroundColor)?.r ?? 1) < 0.5
         let v: CGFloat = dark ? 1 : 0
-        ctx.setStrokeColor(red: v, green: v, blue: v, alpha: 0.08)
+        ctx.setStrokeColor(red: v, green: v, blue: v, alpha: dark ? 0.16 : 0.12)
         ctx.setLineWidth(1)
 
         let offX = (scene.scrollX * scene.zoom).truncatingRemainder(dividingBy: spacing)

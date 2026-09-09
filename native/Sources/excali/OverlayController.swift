@@ -18,6 +18,7 @@ final class OverlayController: NSObject {
     private let canvas = CanvasView(frame: .zero)
     private let toolbar = ToolbarView()
     private let zoomControl = ZoomControlView()
+    private var toolbarTop: NSLayoutConstraint!
 
     private var mode: Mode = .idle
     private var currentPath: String?
@@ -69,9 +70,10 @@ final class OverlayController: NSObject {
         zoomControl.onReset = { [weak self] in self?.canvas.resetZoom() }
         container.addSubview(zoomControl)
 
+        toolbarTop = toolbar.topAnchor.constraint(equalTo: container.topAnchor, constant: 14)
         NSLayoutConstraint.activate([
             toolbar.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            toolbar.topAnchor.constraint(equalTo: container.topAnchor, constant: 14),
+            toolbarTop,
             zoomControl.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
             zoomControl.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16),
         ])
@@ -317,6 +319,8 @@ final class OverlayController: NSObject {
     }
 
     private func showOverlay(screen: NSScreen) {
+        // Push the top toolbar below the notch / menu-bar safe area so it isn't clipped.
+        toolbarTop.constant = max(14, screen.safeAreaInsets.top + 8)
         panel.setFrame(screen.frame, display: true)
         panel.level = .screenSaver
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
