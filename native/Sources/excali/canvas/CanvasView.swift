@@ -473,7 +473,7 @@ final class CanvasView: NSView {
         el.points = [CGPoint(x: 0, y: 0)]
         applyStyle(&el)
         scene.elements.append(el)
-        selection = [el.id]
+        selection.removeAll() // don't leave a selection outline while drawing
         drag = .creating(id: el.id)
     }
 
