@@ -121,6 +121,19 @@ final class CanvasView: NSView {
                 }
                 if let f = pts.first { drawHandle(f, in: ctx, filled: true) }
                 if let l = pts.last { drawHandle(l, in: ctx, filled: true) }
+            } else if el.kind == .freedraw {
+                // Highlight the stroke itself (a soft accent halo) — no bounding box.
+                let pts = el.points.map { scene.toScreen(CGPoint(x: el.x + $0.x, y: el.y + $0.y)) }
+                if pts.count >= 2 {
+                    ctx.saveGState()
+                    ctx.setStrokeColor(NSColor.controlAccentColor.withAlphaComponent(0.4).cgColor)
+                    ctx.setLineWidth(el.strokeWidth * scene.zoom + 6)
+                    ctx.setLineCap(.round); ctx.setLineJoin(.round)
+                    ctx.beginPath(); ctx.move(to: pts[0])
+                    for p in pts.dropFirst() { ctx.addLine(to: p) }
+                    ctx.strokePath()
+                    ctx.restoreGState()
+                }
             } else {
                 let r = screenRect(el.bounds).insetBy(dx: -1, dy: -1)
                 ctx.stroke(r)
