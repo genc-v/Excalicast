@@ -14,6 +14,10 @@ enum CanvasRenderer {
             ctx.setFillColor(red: bg.r, green: bg.g, blue: bg.b, alpha: bg.a)
             ctx.fill(ctx.boundingBoxOfClipPath)
         }
+        // Grid (whiteboards only — not over a frozen screenshot).
+        if scene.gridEnabled, !scene.elements.contains(where: { $0.locked }) {
+            drawGrid(scene, in: ctx)
+        }
         // Bound labels (text attached to a line/arrow) render last so no other line crosses them.
         func isBoundLabel(_ el: Element) -> Bool { el.kind == .text && el.containerId != nil }
         for el in scene.elements where !isBoundLabel(el) {
@@ -28,6 +32,27 @@ enum CanvasRenderer {
             drawElement(el, in: ctx, scene: scene, images: images, backingScale: backingScale)
             ctx.restoreGState()
         }
+    }
+
+    /// A faint grid at 20pt world spacing, aligned to the camera. Skipped when zoomed too far out.
+    private static func drawGrid(_ scene: Scene, in ctx: CGContext) {
+        let spacing = 20 * scene.zoom
+        guard spacing > 4 else { return }
+        let clip = ctx.boundingBoxOfClipPath
+        // Grid contrasts with the canvas: light lines on a dark canvas, dark on a light one.
+        let dark = (Element.rgba(scene.backgroundColor)?.r ?? 1) < 0.5
+        let v: CGFloat = dark ? 1 : 0
+        ctx.setStrokeColor(red: v, green: v, blue: v, alpha: 0.08)
+        ctx.setLineWidth(1)
+
+        let offX = (scene.scrollX * scene.zoom).truncatingRemainder(dividingBy: spacing)
+        let offY = (scene.scrollY * scene.zoom).truncatingRemainder(dividingBy: spacing)
+        ctx.beginPath()
+        var x = clip.minX + offX.truncatingRemainder(dividingBy: spacing)
+        while x <= clip.maxX { ctx.move(to: CGPoint(x: x, y: clip.minY)); ctx.addLine(to: CGPoint(x: x, y: clip.maxY)); x += spacing }
+        var y = clip.minY + offY.truncatingRemainder(dividingBy: spacing)
+        while y <= clip.maxY { ctx.move(to: CGPoint(x: clip.minX, y: y)); ctx.addLine(to: CGPoint(x: clip.maxX, y: y)); y += spacing }
+        ctx.strokePath()
     }
 
     private static func drawElement(_ el: Element, in ctx: CGContext, scene: Scene,

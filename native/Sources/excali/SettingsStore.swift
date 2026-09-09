@@ -11,22 +11,23 @@ struct Hotkey: Equatable {
 enum SettingsStore {
     private static let d = UserDefaults.standard
 
-    // Show the Excalidraw grid on the canvas (off by default).
+    // Show a grid on whiteboards (off by default).
     static var gridEnabled: Bool {
         get { d.object(forKey: "gridEnabled") as? Bool ?? false }
         set { d.set(newValue, forKey: "gridEnabled") }
     }
 
-    // Ask (Save / Discard / Cancel) before clearing a whiteboard for a new one.
-    static var confirmNewWhiteboard: Bool {
-        get { d.object(forKey: "confirmNewWhiteboard") as? Bool ?? true }
-        set { d.set(newValue, forKey: "confirmNewWhiteboard") }
+    /// Canvas color theme: follow the system, or force light/dark.
+    enum Theme: String, CaseIterable { case auto, light, dark }
+    static var theme: Theme {
+        get { Theme(rawValue: d.string(forKey: "canvasTheme") ?? "") ?? .auto }
+        set { d.set(newValue.rawValue, forKey: "canvasTheme") }
     }
 
-    // Ask to save on close if the overlay has been open at least this many seconds (0 = never).
-    static var confirmCloseSeconds: Int {
-        get { d.object(forKey: "confirmCloseSeconds") as? Int ?? 15 }
-        set { d.set(newValue, forKey: "confirmCloseSeconds") }
+    /// Default stroke width for newly-drawn elements.
+    static var strokeWidth: Double {
+        get { d.object(forKey: "strokeWidth") as? Double ?? 2 }
+        set { d.set(newValue, forKey: "strokeWidth") }
     }
 
     // Keep at most this many non-pinned saved items; older ones are auto-deleted (0 = unlimited).

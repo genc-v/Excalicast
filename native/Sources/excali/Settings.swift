@@ -83,6 +83,8 @@ struct SettingsView: View {
     let onChanged: () -> Void
 
     @State private var gridEnabled = SettingsStore.gridEnabled
+    @State private var theme = SettingsStore.theme
+    @State private var strokeWidth = SettingsStore.strokeWidth
     @State private var maxItems = SettingsStore.maxItems
     @State private var saveDir = SettingsStore.saveDir
     @State private var annotate = SettingsStore.annotate
@@ -97,7 +99,21 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Canvas") {
-                Toggle("Show grid", isOn: $gridEnabled)
+                Picker("Theme", selection: $theme) {
+                    Text("Follow system").tag(SettingsStore.Theme.auto)
+                    Text("Light").tag(SettingsStore.Theme.light)
+                    Text("Dark").tag(SettingsStore.Theme.dark)
+                }
+                .onChange(of: theme) { _, v in SettingsStore.theme = v; onChanged() }
+
+                Picker("Default stroke", selection: $strokeWidth) {
+                    Text("Thin").tag(1.0)
+                    Text("Medium").tag(2.0)
+                    Text("Bold").tag(4.0)
+                }
+                .onChange(of: strokeWidth) { _, v in SettingsStore.strokeWidth = v; onChanged() }
+
+                Toggle("Show grid (whiteboards)", isOn: $gridEnabled)
                     .onChange(of: gridEnabled) { _, v in
                         SettingsStore.gridEnabled = v; onChanged()
                     }

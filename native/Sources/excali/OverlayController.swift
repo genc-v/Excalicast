@@ -231,16 +231,29 @@ final class OverlayController: NSObject {
 
     // MARK: - Theme / settings
 
+    private func canvasIsDark() -> Bool {
+        switch SettingsStore.theme {
+        case .light: return false
+        case .dark: return true
+        case .auto: return isDarkEffective()
+        }
+    }
+
     private func applyTheme() {
-        let dark = isDarkEffective()
+        let dark = canvasIsDark()
         canvas.scene.backgroundColor = dark ? "#121212" : "#ffffff"
         canvas.scene.gridEnabled = SettingsStore.gridEnabled
         canvas.strokeColor = dark ? "#ffffff" : "#1e1e1e"
+        canvas.strokeWidth = CGFloat(SettingsStore.strokeWidth)
     }
 
     private func applySettings() {
         guard mode != .idle else { return }
+        let dark = canvasIsDark()
+        canvas.scene.backgroundColor = dark ? "#121212" : "#ffffff"
         canvas.scene.gridEnabled = SettingsStore.gridEnabled
+        canvas.strokeColor = dark ? "#ffffff" : "#1e1e1e"
+        canvas.strokeWidth = CGFloat(SettingsStore.strokeWidth)
         canvas.needsDisplay = true
     }
 
