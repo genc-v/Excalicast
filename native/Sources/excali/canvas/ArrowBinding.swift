@@ -4,10 +4,12 @@ import Foundation
 /// Arrow↔shape binding: attach an arrow endpoint to a shape so it reflows when the shape moves.
 /// Mirrors Excalidraw's `{elementId, focus, gap}` model closely enough that files round-trip.
 enum ArrowBinding {
-    /// Shapes an arrow can bind to (not other lines/arrows/text).
+    /// Items an arrow can bind to: any shape/text/image, except linear elements and the locked
+    /// screenshot background.
     private static func isBindable(_ el: Element) -> Bool {
+        if el.locked || el.isLinear { return false }
         switch el.kind {
-        case .rectangle, .ellipse, .diamond: return true
+        case .rectangle, .ellipse, .diamond, .text, .image: return true
         default: return false
         }
     }

@@ -111,8 +111,8 @@ enum CanvasRenderer {
         ctx.strokePath()
 
         if el.kind == .arrow {
-            drawArrowhead(from: pts[pts.count - 2], to: pts[pts.count - 1],
-                          size: 14 * scene.zoom, in: ctx)
+            let headSize = (12 + el.strokeWidth * 2) * scene.zoom
+            drawArrowhead(from: pts[pts.count - 2], to: pts[pts.count - 1], size: headSize, in: ctx)
         }
     }
 
