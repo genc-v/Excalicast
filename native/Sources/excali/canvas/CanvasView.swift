@@ -355,7 +355,10 @@ final class CanvasView: NSView {
         let r = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
         if !additive { selection.removeAll() }
         for el in scene.elements where !el.locked && el.containerId == nil {
-            if r.intersects(el.bounds) { selection.insert(el.id) }
+            // For lines/arrows, require the marquee to actually cross the path — not just overlap the
+            // (often huge) diagonal bounding box.
+            let hit = el.isLinear ? HitTest.rectIntersectsLinear(r, el) : r.intersects(el.bounds)
+            if hit { selection.insert(el.id) }
         }
     }
 
@@ -570,9 +573,7 @@ final class CanvasView: NSView {
             let size = CanvasRenderer.measureText(scene.elements[i])
             let anchor: CGPoint
             if c.isLinear {
-                let a = CGPoint(x: c.x + (c.points.first?.x ?? 0), y: c.y + (c.points.first?.y ?? 0))
-                let b = CGPoint(x: c.x + (c.points.last?.x ?? 0), y: c.y + (c.points.last?.y ?? 0))
-                anchor = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+                anchor = HitTest.midpointAlong(c.points.map { CGPoint(x: c.x + $0.x, y: c.y + $0.y) })
             } else {
                 anchor = c.center
             }

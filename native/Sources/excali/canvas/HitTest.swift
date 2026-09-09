@@ -46,6 +46,48 @@ enum HitTest {
         }
     }
 
+    /// The point halfway *along* a polyline (by arc length) — where a line/arrow's label belongs,
+    /// which sits on the actual path even when it's bent.
+    static func midpointAlong(_ pts: [CGPoint]) -> CGPoint {
+        guard pts.count >= 2 else { return pts.first ?? .zero }
+        var total: CGFloat = 0
+        for i in 0..<(pts.count - 1) { total += hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y) }
+        var half = total / 2
+        for i in 0..<(pts.count - 1) {
+            let len = hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y)
+            if half <= len {
+                let t = len > 0 ? half / len : 0
+                return CGPoint(x: pts[i].x + (pts[i + 1].x - pts[i].x) * t,
+                               y: pts[i].y + (pts[i + 1].y - pts[i].y) * t)
+            }
+            half -= len
+        }
+        return pts.last ?? .zero
+    }
+
+    /// Whether a marquee rect actually crosses a linear element's path (not just its bounding box).
+    static func rectIntersectsLinear(_ rect: CGRect, _ el: Element) -> Bool {
+        let pts = el.points.map { CGPoint(x: el.x + $0.x, y: el.y + $0.y) }
+        guard pts.count >= 2 else { return false }
+        for i in 0..<(pts.count - 1) where rectIntersectsSegment(rect, pts[i], pts[i + 1]) { return true }
+        return false
+    }
+
+    private static func rectIntersectsSegment(_ r: CGRect, _ a: CGPoint, _ b: CGPoint) -> Bool {
+        if r.contains(a) || r.contains(b) { return true }
+        let tl = CGPoint(x: r.minX, y: r.minY), tr = CGPoint(x: r.maxX, y: r.minY)
+        let br = CGPoint(x: r.maxX, y: r.maxY), bl = CGPoint(x: r.minX, y: r.maxY)
+        return segmentsCross(a, b, tl, tr) || segmentsCross(a, b, tr, br)
+            || segmentsCross(a, b, br, bl) || segmentsCross(a, b, bl, tl)
+    }
+
+    private static func segmentsCross(_ p1: CGPoint, _ p2: CGPoint, _ p3: CGPoint, _ p4: CGPoint) -> Bool {
+        func ccw(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> Bool {
+            (c.y - a.y) * (b.x - a.x) > (b.y - a.y) * (c.x - a.x)
+        }
+        return ccw(p1, p3, p4) != ccw(p2, p3, p4) && ccw(p1, p2, p3) != ccw(p1, p2, p4)
+    }
+
     /// Topmost element (reverse z-order) hit by `p`, if any.
     static func topmost(_ elements: [Element], _ p: CGPoint, tolerance: CGFloat) -> Element? {
         for el in elements.reversed() where !el.locked {
