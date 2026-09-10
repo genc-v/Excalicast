@@ -644,6 +644,11 @@ final class CanvasView: NSView {
         if !selection.isEmpty { return selectedKinds.contains(.text) }
         return tool == .text
     }
+    /// Stroke width applies to everything except text (and images).
+    var showsWidth: Bool {
+        if !selection.isEmpty { return selectedKinds.contains { $0 != .text && $0 != .image } }
+        return tool != .text
+    }
 
     // MARK: - Geometry helpers
 

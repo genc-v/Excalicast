@@ -82,7 +82,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
 struct SettingsView: View {
     let onChanged: () -> Void
 
-    @State private var gridEnabled = SettingsStore.gridEnabled
+    @State private var advanced = SettingsStore.advancedOptions
     @State private var theme = SettingsStore.theme
     @State private var strokeWidth = SettingsStore.strokeWidth
     @State private var maxItems = SettingsStore.maxItems
@@ -113,14 +113,14 @@ struct SettingsView: View {
                 }
                 .onChange(of: strokeWidth) { _, v in SettingsStore.strokeWidth = v; onChanged() }
 
-                Toggle("Show grid (whiteboards)", isOn: $gridEnabled)
-                    .onChange(of: gridEnabled) { _, v in
-                        SettingsStore.gridEnabled = v; onChanged()
+                Toggle("Advanced style options (custom colors + any stroke width)", isOn: $advanced)
+                    .onChange(of: advanced) { _, v in
+                        SettingsStore.advancedOptions = v; onChanged()
                     }
                 HStack {
-                    Text("Keep last N items (0 = all; older unpinned auto-delete)")
+                    Text("Keep last N saved (0 = unlimited; pinned never counted)")
                     Spacer()
-                    TextField("50", value: $maxItems, formatter: NumberFormatter())
+                    TextField("0", value: $maxItems, formatter: NumberFormatter())
                         .frame(width: 64)
                         .multilineTextAlignment(.trailing)
                         .textFieldStyle(.roundedBorder)

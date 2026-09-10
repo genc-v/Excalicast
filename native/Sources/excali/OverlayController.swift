@@ -117,7 +117,8 @@ final class OverlayController: NSObject {
         guard canvas.propsVisible else { return }
         props.configure(stroke: canvas.uiStrokeColor, fill: canvas.uiFillColor,
                         width: canvas.uiStrokeWidth, fontSize: canvas.uiFontSize,
-                        showFill: canvas.showsFill, showFont: canvas.showsFont)
+                        showFill: canvas.showsFill, showWidth: canvas.showsWidth,
+                        showFont: canvas.showsFont, advanced: SettingsStore.advancedOptions)
     }
 
     /// Route the small set of hotkey/menu events to native actions.

@@ -11,10 +11,16 @@ struct Hotkey: Equatable {
 enum SettingsStore {
     private static let d = UserDefaults.standard
 
-    // Show a grid on whiteboards (off by default).
+    // Show a grid on whiteboards (kept for the renderer; no longer exposed in Settings).
     static var gridEnabled: Bool {
         get { d.object(forKey: "gridEnabled") as? Bool ?? false }
         set { d.set(newValue, forKey: "gridEnabled") }
+    }
+
+    /// Advanced style options in the properties panel: custom color picker + arbitrary stroke width.
+    static var advancedOptions: Bool {
+        get { d.object(forKey: "advancedOptions") as? Bool ?? false }
+        set { d.set(newValue, forKey: "advancedOptions") }
     }
 
     /// Canvas color theme: follow the system, or force light/dark.
@@ -31,8 +37,9 @@ enum SettingsStore {
     }
 
     // Keep at most this many non-pinned saved items; older ones are auto-deleted (0 = unlimited).
+    // Pinned items are never counted or deleted.
     static var maxItems: Int {
-        get { d.object(forKey: "maxItems") as? Int ?? 50 }
+        get { d.object(forKey: "maxItems") as? Int ?? 0 }
         set { d.set(newValue, forKey: "maxItems") }
     }
 
