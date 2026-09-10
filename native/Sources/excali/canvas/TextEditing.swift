@@ -73,36 +73,48 @@ extension CanvasView {
         tv.textContainer?.lineFragmentPadding = 0
         tv.onCommit = { [weak self] in self?.commitTextEditing() }
 
-        // A bound label stays centered on its container (shape center / line midpoint) while typing;
-        // free text grows from the click point.
-        var anchorScreen: CGPoint?
-        if let cid = element.containerId, let c = scene.element(id: cid) {
-            let aw = c.isLinear
-                ? HitTest.midpointAlong(c.points.map { CGPoint(x: c.x + $0.x, y: c.y + $0.y) })
-                : c.center
-            anchorScreen = scene.toScreen(aw)
+        // Text inside a shape wraps to the shape's width; configure the field editor to word-wrap.
+        if let cid = element.containerId, let c = scene.element(id: cid), !c.isLinear {
+            tv.isHorizontallyResizable = false
+            tv.textContainer?.widthTracksTextView = true
         }
         tv.onTextChange = { [weak self, weak tv] in
             guard let self, let tv else { return }
-            self.layoutEditor(tv, element: element, anchorScreen: anchorScreen)
+            self.layoutEditor(tv, element: element)
         }
 
         addSubview(tv)
         window?.makeFirstResponder(tv)
         editingTextView = tv
-        layoutEditor(tv, element: element, anchorScreen: anchorScreen)
+        layoutEditor(tv, element: element)
         needsDisplay = true
     }
 
-    /// Size the editor to its text and keep it centered on `anchorScreen` (bound labels) or anchored
-    /// at the element origin (free text).
-    private func layoutEditor(_ tv: CanvasTextView, element: Element, anchorScreen: CGPoint?) {
+    /// Position/size the editor. Shape labels wrap to the shape's inner width and grow the shape's
+    /// height live; line labels center on the midpoint; free text grows from the click point.
+    private func layoutEditor(_ tv: CanvasTextView, element: Element) {
+        let pad = CanvasView.labelPadding
         var probe = element
         probe.text = tv.string.isEmpty ? " " : tv.string
+
+        if let cid = element.containerId, let ci = scene.index(of: cid), !scene.elements[ci].isLinear {
+            let innerW = max(24, scene.elements[ci].width - pad * 2)
+            let sz = CanvasRenderer.measureText(probe, maxWidth: innerW)
+            scene.elements[ci].height = max(sz.height + pad * 2, 24) // grow/shrink height (top fixed)
+            ArrowBinding.reflow(&scene, movedIds: [cid])
+            let c = scene.elements[ci]
+            let o = scene.toScreen(CGPoint(x: c.x + pad, y: c.y + (c.height - sz.height) / 2))
+            tv.frame = CGRect(x: o.x, y: o.y, width: innerW * scene.zoom, height: sz.height * scene.zoom + 2)
+            needsDisplay = true
+            return
+        }
+
         let sz = CanvasRenderer.measureText(probe)
         let w = max(40, sz.width * scene.zoom) + 12
         let h = max(element.fontSize * scene.zoom * 1.3, sz.height * scene.zoom) + 4
-        if let a = anchorScreen {
+        if let cid = element.containerId, let c = scene.element(id: cid), c.isLinear {
+            let mid = HitTest.midpointAlong(c.points.map { CGPoint(x: c.x + $0.x, y: c.y + $0.y) })
+            let a = scene.toScreen(mid)
             tv.frame = CGRect(x: a.x - w / 2, y: a.y - h / 2, width: w, height: h)
         } else {
             let o = scene.toScreen(CGPoint(x: element.x, y: element.y))

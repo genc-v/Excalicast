@@ -410,11 +410,9 @@ final class CanvasView: NSView {
             let s = max(rect.width / max(orig.width, 1), rect.height / max(orig.height, 1))
             rect.size = CGSize(width: orig.width * s, height: orig.height * s)
         }
-        // A shape with a label can't shrink below the text it contains.
-        if let minSize = boundLabelMinSize(of: id) {
-            rect.size.width = max(rect.width, minSize.width)
-            rect.size.height = max(rect.height, minSize.height)
-        }
+        // A labeled shape keeps a sensible min width (text re-wraps to it); its height auto-fits the
+        // wrapped text via layoutBoundText, so we don't clamp height here.
+        if hasBoundLabel(id) { rect.size.width = max(rect.width, 48) }
         scene.elements[i].x = rect.minX
         scene.elements[i].y = rect.minY
         scene.elements[i].width = max(2, rect.width)
@@ -713,35 +711,37 @@ final class CanvasView: NSView {
     /// a line's label sits at its midpoint.
     func layoutBoundText() {
         var grown = Set<String>()
+        let pad = Self.labelPadding
         for i in scene.elements.indices where scene.elements[i].kind == .text {
             guard let cid = scene.elements[i].containerId, let ci = scene.index(of: cid) else { continue }
-            let size = CanvasRenderer.measureText(scene.elements[i])
-            let anchor: CGPoint
             if scene.elements[ci].isLinear {
+                // Line/arrow label: sits on the midpoint, natural size.
                 let c = scene.elements[ci]
-                anchor = HitTest.midpointAlong(c.points.map { CGPoint(x: c.x + $0.x, y: c.y + $0.y) })
+                let size = CanvasRenderer.measureText(scene.elements[i])
+                let anchor = HitTest.midpointAlong(c.points.map { CGPoint(x: c.x + $0.x, y: c.y + $0.y) })
+                scene.elements[i].width = size.width; scene.elements[i].height = size.height
+                scene.elements[i].x = anchor.x - size.width / 2
+                scene.elements[i].y = anchor.y - size.height / 2
             } else {
-                // Grow the shape to fit the label (never shrink it here).
-                let needW = size.width + Self.labelPadding * 2
-                let needH = size.height + Self.labelPadding * 2
+                // Shape label: wrap to the shape's fixed inner width; the shape grows/shrinks in
+                // height (top fixed → expands downward) to fit the wrapped text.
                 var c = scene.elements[ci]
-                if c.width < needW { let cx = c.center.x; c.width = needW; c.x = cx - needW / 2; grown.insert(cid) }
-                if c.height < needH { let cy = c.center.y; c.height = needH; c.y = cy - needH / 2; grown.insert(cid) }
+                let innerW = max(24, c.width - pad * 2)
+                let size = CanvasRenderer.measureText(scene.elements[i], maxWidth: innerW)
+                let needH = size.height + pad * 2
+                if abs(c.height - needH) > 0.5 { c.height = max(needH, 24); grown.insert(cid) }
                 scene.elements[ci] = c
-                anchor = c.center
+                scene.elements[i].width = innerW
+                scene.elements[i].height = size.height
+                scene.elements[i].x = c.x + pad
+                scene.elements[i].y = c.y + (c.height - size.height) / 2
             }
-            scene.elements[i].x = anchor.x - size.width / 2
-            scene.elements[i].y = anchor.y - size.height / 2
         }
         if !grown.isEmpty { ArrowBinding.reflow(&scene, movedIds: grown) }
     }
 
-    /// The minimum size a shape must keep to contain its bound label (nil if it has none).
-    private func boundLabelMinSize(of containerId: String) -> CGSize? {
-        guard let t = scene.elements.first(where: { $0.kind == .text && $0.containerId == containerId })
-        else { return nil }
-        let s = CanvasRenderer.measureText(t)
-        return CGSize(width: s.width + Self.labelPadding * 2, height: s.height + Self.labelPadding * 2)
+    private func hasBoundLabel(_ containerId: String) -> Bool {
+        scene.elements.contains { $0.kind == .text && $0.containerId == containerId }
     }
 
     // MARK: - Keyboard

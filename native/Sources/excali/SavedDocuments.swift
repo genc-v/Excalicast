@@ -59,7 +59,7 @@ enum SavedDocuments {
             .path
     }
 
-    /// Delete oldest non-pinned items beyond the retention limit (0 = unlimited).
+    /// Move oldest non-pinned items beyond the retention limit to the Trash (0 = unlimited).
     static func prune() {
         let limit = SettingsStore.maxItems
         guard limit > 0 else { return }
@@ -67,8 +67,15 @@ enum SavedDocuments {
         guard nonPinned.count > limit else { return }
         let fm = FileManager.default
         for item in nonPinned.suffix(nonPinned.count - limit) {
-            try? fm.removeItem(atPath: item.excalidrawPath)
-            if let p = item.previewPath { try? fm.removeItem(atPath: p) }
+            try? fm.trashItem(at: URL(fileURLWithPath: item.excalidrawPath), resultingItemURL: nil)
+            if let p = item.previewPath {
+                try? fm.trashItem(at: URL(fileURLWithPath: p), resultingItemURL: nil)
+            }
         }
+    }
+
+    /// Number of non-pinned saved documents (used for retention warnings).
+    static func nonPinnedCount() -> Int {
+        all().filter { !$0.pinned }.count
     }
 }

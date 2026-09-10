@@ -86,6 +86,7 @@ struct SettingsView: View {
     @State private var theme = SettingsStore.theme
     @State private var strokeWidth = SettingsStore.strokeWidth
     @State private var maxItems = SettingsStore.maxItems
+    @State private var trashWarning = 0
     @State private var saveDir = SettingsStore.saveDir
     @State private var annotate = SettingsStore.annotate
     @State private var whiteboard = SettingsStore.whiteboard
@@ -118,15 +119,29 @@ struct SettingsView: View {
                         SettingsStore.advancedOptions = v; onChanged()
                     }
                 HStack {
-                    Text("Keep last N saved (0 = unlimited; pinned never counted)")
+                    Text("Saved items")
                     Spacer()
                     TextField("0", value: $maxItems, formatter: NumberFormatter())
                         .frame(width: 64)
                         .multilineTextAlignment(.trailing)
                         .textFieldStyle(.roundedBorder)
                         .onChange(of: maxItems) { _, v in
-                            SettingsStore.maxItems = max(0, v); onChanged()
+                            let n = max(0, v)
+                            SettingsStore.maxItems = n
+                            trashWarning = (n > 0 && SavedDocuments.nonPinnedCount() > n)
+                                ? SavedDocuments.nonPinnedCount() - n
+                                : 0
+                            onChanged()
                         }
+                }
+                Text("How many documents to keep. 0 means infinite — every document is kept. Pinned items are never counted. Older items beyond this number are moved to the Trash (not permanently deleted).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if trashWarning > 0 {
+                    Label("Lowering this from infinite will move \(trashWarning) older item\(trashWarning == 1 ? "" : "s") to the Trash.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
             }
             Section("Shortcuts") {

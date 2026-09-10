@@ -211,9 +211,13 @@ enum CanvasRenderer {
         let origin = scene.toScreen(CGPoint(x: el.x, y: el.y))
         let attr = attributedString(el, scale: scene.zoom)
         let framesetter = CTFramesetterCreateWithAttributedString(attr)
-        let size = CTFramesetterSuggestFrameSizeWithConstraints(
+        // Text bound inside a shape wraps to the shape's (fixed) width; free/line text is natural.
+        let wraps = el.containerId != nil && scene.element(id: el.containerId!)?.isLinear == false
+        let maxW = wraps ? el.width * scene.zoom : CGFloat.greatestFiniteMagnitude
+        let measured = CTFramesetterSuggestFrameSizeWithConstraints(
             framesetter, CFRange(location: 0, length: 0), nil,
-            CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude), nil)
+            CGSize(width: maxW, height: CGFloat.greatestFiniteMagnitude), nil)
+        let size = CGSize(width: wraps ? maxW : measured.width, height: measured.height)
 
         // A label bound to a line/arrow gets a background swatch (canvas color) so the line doesn't
         // run through the text.
@@ -238,13 +242,14 @@ enum CanvasRenderer {
         ctx.restoreGState()
     }
 
-    /// World-space size of a text element's content (for hit bounds + editor sizing).
-    static func measureText(_ el: Element) -> CGSize {
+    /// World-space size of a text element's content. Pass `maxWidth` to wrap (for text inside a
+    /// shape); omit it for natural (single-/multi-line, non-wrapping) sizing.
+    static func measureText(_ el: Element, maxWidth: CGFloat = .greatestFiniteMagnitude) -> CGSize {
         let attr = attributedString(el, scale: 1)
         let fs = CTFramesetterCreateWithAttributedString(attr)
         return CTFramesetterSuggestFrameSizeWithConstraints(
             fs, CFRange(location: 0, length: 0), nil,
-            CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude), nil)
+            CGSize(width: maxWidth, height: CGFloat.greatestFiniteMagnitude), nil)
     }
 }
 
