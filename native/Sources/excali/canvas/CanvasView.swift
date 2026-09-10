@@ -600,6 +600,23 @@ final class CanvasView: NSView {
     func setFillColor(_ hex: String) { fillColor = hex; applyToSelection { $0.backgroundColor = hex }; onStyleContextChange?() }
     func setStrokeWidth(_ w: CGFloat) { strokeWidth = w; applyToSelection { $0.strokeWidth = w }; onStyleContextChange?() }
 
+    var currentTextAlign = "left"
+    func setTextAlign(_ a: String) {
+        currentTextAlign = a
+        if !selection.isEmpty {
+            history.commit(scene.elements)
+            for id in selection where scene.element(id: id)?.kind == .text {
+                if let i = scene.index(of: id) { scene.elements[i].textAlign = a }
+            }
+            onChange?()
+        }
+        needsDisplay = true; onStyleContextChange?()
+    }
+    var uiTextAlign: String {
+        for id in selection where scene.element(id: id)?.kind == .text { return scene.element(id: id)!.textAlign }
+        return currentTextAlign
+    }
+
     func setFontSize(_ s: CGFloat) {
         currentFontSize = s
         if !selection.isEmpty {

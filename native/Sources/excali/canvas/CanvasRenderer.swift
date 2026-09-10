@@ -196,7 +196,14 @@ enum CanvasRenderer {
         let color = NSColor.fromHex(el.strokeColor) ?? .labelColor
         let font = NSFont(name: "Helvetica Neue", size: el.fontSize * scale)
             ?? NSFont.systemFont(ofSize: el.fontSize * scale)
-        return NSAttributedString(string: el.text, attributes: [.font: font, .foregroundColor: color])
+        let para = NSMutableParagraphStyle()
+        switch el.textAlign {
+        case "center": para.alignment = .center
+        case "right": para.alignment = .right
+        default: para.alignment = .left
+        }
+        return NSAttributedString(string: el.text,
+                                  attributes: [.font: font, .foregroundColor: color, .paragraphStyle: para])
     }
 
     private static func drawText(_ el: Element, in ctx: CGContext, scene: Scene, backingScale: CGFloat) {

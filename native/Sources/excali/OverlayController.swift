@@ -82,6 +82,7 @@ final class OverlayController: NSObject {
         props.onFill = { [weak self] c in self?.canvas.setFillColor(c) }
         props.onWidth = { [weak self] w in self?.canvas.setStrokeWidth(w) }
         props.onFont = { [weak self] s in self?.canvas.setFontSize(s) }
+        props.onAlign = { [weak self] a in self?.canvas.setTextAlign(a) }
         container.addSubview(props)
 
         toolbarTop = toolbar.topAnchor.constraint(equalTo: container.topAnchor, constant: 14)
@@ -116,7 +117,7 @@ final class OverlayController: NSObject {
         props.isHidden = !canvas.propsVisible
         guard canvas.propsVisible else { return }
         props.configure(stroke: canvas.uiStrokeColor, fill: canvas.uiFillColor,
-                        width: canvas.uiStrokeWidth, fontSize: canvas.uiFontSize,
+                        width: canvas.uiStrokeWidth, fontSize: canvas.uiFontSize, align: canvas.uiTextAlign,
                         showFill: canvas.showsFill, showWidth: canvas.showsWidth,
                         showFont: canvas.showsFont, advanced: SettingsStore.advancedOptions)
     }

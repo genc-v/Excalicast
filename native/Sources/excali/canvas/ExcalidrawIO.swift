@@ -92,7 +92,7 @@ enum ExcalidrawIO {
             d["originalText"] = el.text
             d["fontSize"] = el.fontSize
             d["fontFamily"] = el.fontFamily
-            d["textAlign"] = el.containerId != nil ? "center" : "left"
+            d["textAlign"] = el.textAlign
             d["verticalAlign"] = el.containerId != nil ? "middle" : "top"
             d["lineHeight"] = 1.25
             d["baseline"] = el.fontSize
@@ -174,6 +174,7 @@ enum ExcalidrawIO {
         el.text = d["text"] as? String ?? ""
         el.fontSize = (d["fontSize"] as? NSNumber).map { CGFloat(truncating: $0) } ?? 20
         el.fontFamily = d["fontFamily"] as? Int ?? 1
+        el.textAlign = d["textAlign"] as? String ?? "left"
         el.containerId = d["containerId"] as? String
         el.fileId = d["fileId"] as? String
         return el

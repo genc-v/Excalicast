@@ -9,6 +9,7 @@ final class PropertiesPanel: NSView {
     var onFill: ((String) -> Void)?
     var onWidth: ((CGFloat) -> Void)?
     var onFont: ((CGFloat) -> Void)?
+    var onAlign: ((String) -> Void)?
 
     static let strokeColors = ["#1e1e1e", "#e03131", "#2f9e44", "#1971c2", "#f08c00"]
     static let fillColors = ["transparent", "#ffc9c9", "#b2f2bb", "#a5d8ff", "#ffec99"]
@@ -19,6 +20,8 @@ final class PropertiesPanel: NSView {
     private var fillSwatches: [NSButton] = []
     private let widthSeg = NSSegmentedControl(labels: ["S", "M", "L"], trackingMode: .selectOne, target: nil, action: nil)
     private let fontSeg = NSSegmentedControl(labels: ["S", "M", "L", "XL"], trackingMode: .selectOne, target: nil, action: nil)
+    private let alignSeg = NSSegmentedControl(labels: ["Left", "Center", "Right"], trackingMode: .selectOne, target: nil, action: nil)
+    private static let aligns = ["left", "center", "right"]
     private let widthField = NSTextField()
     private let fillSection = NSStackView()
     private let widthSection = NSStackView()
@@ -63,9 +66,11 @@ final class PropertiesPanel: NSView {
         widthSection.addArrangedSubview(section("Stroke width", widthRow))
         root.addArrangedSubview(widthSection)
 
-        fontSection.orientation = .vertical; fontSection.alignment = .leading; fontSection.spacing = 4
+        fontSection.orientation = .vertical; fontSection.alignment = .leading; fontSection.spacing = 8
         fontSeg.target = self; fontSeg.action = #selector(fontChanged)
+        alignSeg.target = self; alignSeg.action = #selector(alignChanged)
         fontSection.addArrangedSubview(section("Font size", fontSeg))
+        fontSection.addArrangedSubview(section("Align", alignSeg))
         root.addArrangedSubview(fontSection)
 
         NSLayoutConstraint.activate([
@@ -122,13 +127,14 @@ final class PropertiesPanel: NSView {
 
     // MARK: - State
 
-    func configure(stroke: String, fill: String, width: CGFloat, fontSize: CGFloat,
+    func configure(stroke: String, fill: String, width: CGFloat, fontSize: CGFloat, align: String,
                    showFill: Bool, showWidth: Bool, showFont: Bool, advanced: Bool) {
         currentStroke = stroke; currentFill = fill
         highlight(strokeSwatches, Self.strokeColors.firstIndex(of: stroke))
         highlight(fillSwatches, Self.fillColors.firstIndex(of: fill))
         widthSeg.selectedSegment = Self.widths.firstIndex(of: width) ?? -1
         fontSeg.selectedSegment = Self.fonts.firstIndex(of: fontSize) ?? -1
+        alignSeg.selectedSegment = Self.aligns.firstIndex(of: align) ?? 0
         widthField.stringValue = "\(Int(width))"
         widthField.isHidden = !advanced
         fillSection.isHidden = !showFill
@@ -148,6 +154,7 @@ final class PropertiesPanel: NSView {
     @objc private func fillTapped(_ s: NSButton) { onFill?(Self.fillColors[s.tag]) }
     @objc private func widthChanged() { if widthSeg.selectedSegment >= 0 { onWidth?(Self.widths[widthSeg.selectedSegment]) } }
     @objc private func fontChanged() { if fontSeg.selectedSegment >= 0 { onFont?(Self.fonts[fontSeg.selectedSegment]) } }
+    @objc private func alignChanged() { if alignSeg.selectedSegment >= 0 { onAlign?(Self.aligns[alignSeg.selectedSegment]) } }
     @objc private func widthFieldChanged() {
         let v = CGFloat(widthField.doubleValue)
         if v > 0 { onWidth?(v) } // no upper cap — go as astronomical as you like

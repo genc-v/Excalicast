@@ -54,6 +54,7 @@ struct Element: Identifiable, Equatable {
     var text: String = ""
     var fontSize: CGFloat = 20
     var fontFamily: Int = 1 // matches Excalidraw's font id; unused natively beyond persistence
+    var textAlign: String = "left" // left | center | right
     var containerId: String? // if set, this text is bound inside a shape / to a line's midpoint
 
     // Image (the locked frozen-screenshot background).
