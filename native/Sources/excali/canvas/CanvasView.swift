@@ -410,6 +410,11 @@ final class CanvasView: NSView {
             let s = max(rect.width / max(orig.width, 1), rect.height / max(orig.height, 1))
             rect.size = CGSize(width: orig.width * s, height: orig.height * s)
         }
+        // A shape with a label can't shrink below the text it contains.
+        if let minSize = boundLabelMinSize(of: id) {
+            rect.size.width = max(rect.width, minSize.width)
+            rect.size.height = max(rect.height, minSize.height)
+        }
         scene.elements[i].x = rect.minX
         scene.elements[i].y = rect.minY
         scene.elements[i].width = max(2, rect.width)
@@ -702,20 +707,41 @@ final class CanvasView: NSView {
         if let i = scene.index(of: id) { ArrowBinding.bindEndpoints(&scene, arrowIndex: i) }
     }
 
-    /// Re-center every bound text inside its container (shape center) or a line's midpoint.
+    static let labelPadding: CGFloat = 12
+
+    /// Re-center every bound text inside its container. A shape grows so the label always fits;
+    /// a line's label sits at its midpoint.
     func layoutBoundText() {
+        var grown = Set<String>()
         for i in scene.elements.indices where scene.elements[i].kind == .text {
-            guard let cid = scene.elements[i].containerId, let c = scene.element(id: cid) else { continue }
+            guard let cid = scene.elements[i].containerId, let ci = scene.index(of: cid) else { continue }
             let size = CanvasRenderer.measureText(scene.elements[i])
             let anchor: CGPoint
-            if c.isLinear {
+            if scene.elements[ci].isLinear {
+                let c = scene.elements[ci]
                 anchor = HitTest.midpointAlong(c.points.map { CGPoint(x: c.x + $0.x, y: c.y + $0.y) })
             } else {
+                // Grow the shape to fit the label (never shrink it here).
+                let needW = size.width + Self.labelPadding * 2
+                let needH = size.height + Self.labelPadding * 2
+                var c = scene.elements[ci]
+                if c.width < needW { let cx = c.center.x; c.width = needW; c.x = cx - needW / 2; grown.insert(cid) }
+                if c.height < needH { let cy = c.center.y; c.height = needH; c.y = cy - needH / 2; grown.insert(cid) }
+                scene.elements[ci] = c
                 anchor = c.center
             }
             scene.elements[i].x = anchor.x - size.width / 2
             scene.elements[i].y = anchor.y - size.height / 2
         }
+        if !grown.isEmpty { ArrowBinding.reflow(&scene, movedIds: grown) }
+    }
+
+    /// The minimum size a shape must keep to contain its bound label (nil if it has none).
+    private func boundLabelMinSize(of containerId: String) -> CGSize? {
+        guard let t = scene.elements.first(where: { $0.kind == .text && $0.containerId == containerId })
+        else { return nil }
+        let s = CanvasRenderer.measureText(t)
+        return CGSize(width: s.width + Self.labelPadding * 2, height: s.height + Self.labelPadding * 2)
     }
 
     // MARK: - Keyboard
@@ -747,12 +773,10 @@ final class CanvasView: NSView {
         }
 
         if cmd {
+            // Cut/Copy/Paste/Select-All come through the Edit menu (so they also work while editing
+            // text); here we handle the canvas-only shortcuts.
             switch chars {
             case "z": shift ? redo() : undo(); return
-            case "a": selection = Set(scene.elements.filter { !$0.locked && $0.containerId == nil }.map { $0.id }); needsDisplay = true; return
-            case "c": clipboard = scene.elements.filter { selection.contains($0.id) }; return
-            case "v": pasteElements(); return
-            case "x": clipboard = scene.elements.filter { selection.contains($0.id) }; deleteSelection(); return
             case "d": duplicateSelection(); return
             case "=", "+": zoomStep(1.1); return
             case "-", "_": zoomStep(1 / 1.1); return
@@ -815,6 +839,17 @@ final class CanvasView: NSView {
             scene.elements = next; selection.removeAll(); onChange?(); needsDisplay = true
         }
     }
+
+    // MARK: - Standard Edit-menu actions (route here when the canvas is first responder; the text
+    // field editor handles them while editing text)
+
+    override func selectAll(_ sender: Any?) {
+        selection = Set(scene.elements.filter { !$0.locked && $0.containerId == nil }.map { $0.id })
+        needsDisplay = true
+    }
+    @objc func copy(_ sender: Any?) { clipboard = scene.elements.filter { selection.contains($0.id) } }
+    @objc func cut(_ sender: Any?) { copy(sender); if !selection.isEmpty { deleteSelection() } }
+    @objc func paste(_ sender: Any?) { pasteElements() }
 
     // MARK: - Copy / paste / duplicate
 
