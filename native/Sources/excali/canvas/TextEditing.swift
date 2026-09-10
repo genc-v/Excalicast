@@ -19,7 +19,7 @@ extension CanvasView {
             var n = Element(kind: .text)
             n.x = world.x; n.y = world.y
             n.strokeColor = strokeColor
-            n.fontSize = 20
+            n.fontSize = currentFontSize
             scene.elements.append(n)
             selection = [n.id]
             element = n
@@ -37,7 +37,7 @@ extension CanvasView {
         var t = Element(kind: .text)
         t.containerId = container.id
         t.strokeColor = container.isLinear ? strokeColor : strokeColor
-        t.fontSize = 20
+        t.fontSize = currentFontSize
         if container.isLinear {
             let a = CGPoint(x: container.x + (container.points.first?.x ?? 0),
                             y: container.y + (container.points.first?.y ?? 0))

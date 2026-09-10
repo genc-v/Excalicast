@@ -19,6 +19,7 @@ final class OverlayController: NSObject {
     private let toolbar = ToolbarView()
     private let zoomControl = ZoomControlView()
     private let toast = ToastView()
+    private let props = PropertiesPanel()
     private var toolbarTop: NSLayoutConstraint!
 
     private var mode: Mode = .idle
@@ -51,6 +52,7 @@ final class OverlayController: NSObject {
         canvas.onDismiss = { [weak self] in self?.dismiss() }
         canvas.onToolChange = { [weak self] tool in self?.toolbar.highlight(tool) }
         canvas.onZoomChange = { [weak self] z in self?.zoomControl.setZoom(z) }
+        canvas.onStyleContextChange = { [weak self] in self?.refreshProps() }
 
         let container = NSView(frame: canvas.bounds)
         container.autoresizingMask = [.width, .height]
@@ -74,6 +76,14 @@ final class OverlayController: NSObject {
         toast.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(toast)
 
+        props.translatesAutoresizingMaskIntoConstraints = false
+        props.isHidden = true
+        props.onStroke = { [weak self] c in self?.canvas.setStrokeColor(c) }
+        props.onFill = { [weak self] c in self?.canvas.setFillColor(c) }
+        props.onWidth = { [weak self] w in self?.canvas.setStrokeWidth(w) }
+        props.onFont = { [weak self] s in self?.canvas.setFontSize(s) }
+        container.addSubview(props)
+
         toolbarTop = toolbar.topAnchor.constraint(equalTo: container.topAnchor, constant: 14)
         NSLayoutConstraint.activate([
             toolbar.centerXAnchor.constraint(equalTo: container.centerXAnchor),
@@ -82,6 +92,8 @@ final class OverlayController: NSObject {
             zoomControl.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16),
             toast.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             toast.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -24),
+            props.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            props.centerYAnchor.constraint(equalTo: container.centerYAnchor),
         ])
 
         panel.contentView = container
@@ -98,6 +110,15 @@ final class OverlayController: NSObject {
 
     /// Warm ScreenCaptureKit at launch so the first ⌘⇧A capture is fast.
     func prewarm() { Capture.prewarm() }
+
+    /// Sync the properties panel to the current tool/selection and show/hide it.
+    private func refreshProps() {
+        props.isHidden = !canvas.propsVisible
+        guard canvas.propsVisible else { return }
+        props.configure(stroke: canvas.uiStrokeColor, fill: canvas.uiFillColor,
+                        width: canvas.uiStrokeWidth, fontSize: canvas.uiFontSize,
+                        showFill: canvas.showsFill, showFont: canvas.showsFont)
+    }
 
     /// Route the small set of hotkey/menu events to native actions.
     func emit(_ event: String) {

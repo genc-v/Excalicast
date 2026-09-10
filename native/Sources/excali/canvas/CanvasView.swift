@@ -14,16 +14,18 @@ enum ResizeHandle { case nw, n, ne, e, se, s, sw, w }
 final class CanvasView: NSView {
     var scene = Scene()
     let history = History()
-    var tool: Tool = .select { didSet { updateCursor(); onToolChange?(tool) } }
+    var tool: Tool = .select { didSet { updateCursor(); onToolChange?(tool); onStyleContextChange?() } }
     var onToolChange: ((Tool) -> Void)?
     var onZoomChange: ((CGFloat) -> Void)? // reports zoom (1 = 100%) for the on-screen indicator
+    var onStyleContextChange: (() -> Void)? // selection/tool changed → refresh the properties panel
 
     // Current style applied to newly-created elements.
     var strokeColor = "#1e1e1e"
     var fillColor = "transparent"
     var strokeWidth: CGFloat = 2
+    var currentFontSize: CGFloat = 20
 
-    var selection: Set<String> = []
+    var selection: Set<String> = [] { didSet { onStyleContextChange?() } }
     var images: [String: CGImage] = [:] // fileId -> decoded bitmap (locked screenshot background)
     var imageDataURLs: [String: String] = [:] // fileId -> original PNG dataURL, cached to avoid
                                                // re-encoding the full-res screenshot on every save
@@ -581,6 +583,66 @@ final class CanvasView: NSView {
         el.strokeColor = strokeColor
         el.backgroundColor = fillColor
         el.strokeWidth = strokeWidth
+    }
+
+    // MARK: - Style editing (properties panel)
+
+    /// Apply a mutation to all selected elements (committing undo) — or, if nothing is selected, the
+    /// caller has already updated the tool defaults.
+    private func applyToSelection(_ change: (inout Element) -> Void) {
+        guard !selection.isEmpty else { needsDisplay = true; return }
+        history.commit(scene.elements)
+        for id in selection { if let i = scene.index(of: id) { change(&scene.elements[i]) } }
+        onChange?(); needsDisplay = true
+    }
+
+    func setStrokeColor(_ hex: String) { strokeColor = hex; applyToSelection { $0.strokeColor = hex }; onStyleContextChange?() }
+    func setFillColor(_ hex: String) { fillColor = hex; applyToSelection { $0.backgroundColor = hex }; onStyleContextChange?() }
+    func setStrokeWidth(_ w: CGFloat) { strokeWidth = w; applyToSelection { $0.strokeWidth = w }; onStyleContextChange?() }
+
+    func setFontSize(_ s: CGFloat) {
+        currentFontSize = s
+        if !selection.isEmpty {
+            history.commit(scene.elements)
+            for id in selection where scene.element(id: id)?.kind == .text {
+                guard let i = scene.index(of: id) else { continue }
+                scene.elements[i].fontSize = s
+                let sz = CanvasRenderer.measureText(scene.elements[i])
+                scene.elements[i].width = sz.width; scene.elements[i].height = sz.height
+            }
+            layoutBoundText(); onChange?()
+        }
+        needsDisplay = true; onStyleContextChange?()
+    }
+
+    // Effective values to display: the selection's (first element), else the tool defaults.
+    private var firstSelectedElement: Element? {
+        for id in selection { if let e = scene.element(id: id) { return e } }
+        return nil
+    }
+    private var selectedKinds: Set<ElementKind> { Set(selection.compactMap { scene.element(id: $0)?.kind }) }
+
+    var uiStrokeColor: String { firstSelectedElement?.strokeColor ?? strokeColor }
+    var uiFillColor: String { firstSelectedElement?.backgroundColor ?? fillColor }
+    var uiStrokeWidth: CGFloat { firstSelectedElement?.strokeWidth ?? strokeWidth }
+    var uiFontSize: CGFloat {
+        for id in selection where scene.element(id: id)?.kind == .text { return scene.element(id: id)!.fontSize }
+        return currentFontSize
+    }
+
+    /// Whether the properties panel should be visible, and which sections apply.
+    var propsVisible: Bool {
+        if !selection.isEmpty { return true }
+        return [.rectangle, .ellipse, .diamond, .line, .arrow, .pen, .text].contains(tool)
+    }
+    var showsFill: Bool {
+        let shapes: Set<ElementKind> = [.rectangle, .ellipse, .diamond]
+        if !selection.isEmpty { return !selectedKinds.isDisjoint(with: shapes) }
+        return [.rectangle, .ellipse, .diamond].contains(tool)
+    }
+    var showsFont: Bool {
+        if !selection.isEmpty { return selectedKinds.contains(.text) }
+        return tool == .text
     }
 
     // MARK: - Geometry helpers
