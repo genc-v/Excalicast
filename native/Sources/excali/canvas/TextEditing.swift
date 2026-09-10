@@ -53,8 +53,10 @@ extension CanvasView {
             t.x = container.center.x; t.y = container.center.y
         }
         scene.elements.append(t)
-        if let ci = scene.index(of: container.id), !scene.elements[ci].boundElements.contains(t.id) {
-            scene.elements[ci].boundElements.append(t.id)
+        if let ci = scene.index(of: container.id) {
+            if !scene.elements[ci].boundElements.contains(t.id) { scene.elements[ci].boundElements.append(t.id) }
+            // Pin the current height as the floor so adding a label never shrinks the shape.
+            if scene.elements[ci].minHeight == 0 { scene.elements[ci].minHeight = scene.elements[ci].height }
         }
         presentEditor(for: t)
     }
@@ -100,7 +102,8 @@ extension CanvasView {
         if let cid = element.containerId, let ci = scene.index(of: cid), !scene.elements[ci].isLinear {
             let innerW = max(24, scene.elements[ci].width - pad * 2)
             let sz = CanvasRenderer.measureText(probe, maxWidth: innerW)
-            scene.elements[ci].height = max(sz.height + pad * 2, 24) // grow/shrink height (top fixed)
+            // Grow to fit; never below the shape's drawn/resized height (no shrink on typing).
+            scene.elements[ci].height = max(sz.height + pad * 2, scene.elements[ci].minHeight, 24)
             ArrowBinding.reflow(&scene, movedIds: [cid])
             let c = scene.elements[ci]
             let o = scene.toScreen(CGPoint(x: c.x + pad, y: c.y + (c.height - sz.height) / 2))

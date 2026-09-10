@@ -52,6 +52,7 @@ struct Element: Identifiable, Equatable {
 
     // Text.
     var text: String = ""
+    var minHeight: CGFloat = 0 // a labeled shape never shrinks below its drawn/resized height
     var fontSize: CGFloat = 20
     var fontFamily: Int = 1 // matches Excalidraw's font id; unused natively beyond persistence
     var textAlign: String = "left" // left | center | right

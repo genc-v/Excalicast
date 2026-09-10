@@ -417,6 +417,7 @@ final class CanvasView: NSView {
         scene.elements[i].y = rect.minY
         scene.elements[i].width = max(2, rect.width)
         scene.elements[i].height = max(2, rect.height)
+        scene.elements[i].minHeight = scene.elements[i].height // resizing sets the height floor
         afterGeometryChange([id])
         needsDisplay = true
     }
@@ -529,6 +530,7 @@ final class CanvasView: NSView {
             if el.width < 0 { el.x += el.width; el.width = -el.width }
             if el.height < 0 { el.y += el.height; el.height = -el.height }
             if el.width < 3 && el.height < 3 { scene.elements.remove(at: i); selection.removeAll(); return }
+            el.minHeight = el.height // remember the drawn height as the floor for any future label
             scene.elements[i] = el
         }
         tool = .select
@@ -728,8 +730,9 @@ final class CanvasView: NSView {
                 var c = scene.elements[ci]
                 let innerW = max(24, c.width - pad * 2)
                 let size = CanvasRenderer.measureText(scene.elements[i], maxWidth: innerW)
-                let needH = size.height + pad * 2
-                if abs(c.height - needH) > 0.5 { c.height = max(needH, 24); grown.insert(cid) }
+                // Grow to fit the text, but never below the shape's drawn/resized height.
+                let target = max(size.height + pad * 2, c.minHeight, 24)
+                if abs(c.height - target) > 0.5 { c.height = target; grown.insert(cid) }
                 scene.elements[ci] = c
                 scene.elements[i].width = innerW
                 scene.elements[i].height = size.height
