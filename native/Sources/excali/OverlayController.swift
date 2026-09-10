@@ -18,6 +18,7 @@ final class OverlayController: NSObject {
     private let canvas = CanvasView(frame: .zero)
     private let toolbar = ToolbarView()
     private let zoomControl = ZoomControlView()
+    private let toast = ToastView()
     private var toolbarTop: NSLayoutConstraint!
 
     private var mode: Mode = .idle
@@ -70,12 +71,17 @@ final class OverlayController: NSObject {
         zoomControl.onReset = { [weak self] in self?.canvas.resetZoom() }
         container.addSubview(zoomControl)
 
+        toast.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(toast)
+
         toolbarTop = toolbar.topAnchor.constraint(equalTo: container.topAnchor, constant: 14)
         NSLayoutConstraint.activate([
             toolbar.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             toolbarTop,
             zoomControl.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
             zoomControl.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16),
+            toast.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            toast.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -24),
         ])
 
         panel.contentView = container
@@ -153,11 +159,14 @@ final class OverlayController: NSObject {
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
                 NSWorkspace.shared.open(url)
             }
+            toast.show("Enable Screen Recording for Excalicast, then relaunch", duration: 4)
             return
         }
 
         Task { @MainActor in
-            guard let cap = try? await Capture.captureUnderCursor() else { return }
+            guard let cap = try? await Capture.captureUnderCursor() else {
+                toast.show("Screen capture failed"); return
+            }
             let img = cap.image
             loadBlank()
             let fileId = "snapshot-\(img.width)x\(img.height)"
@@ -169,6 +178,7 @@ final class OverlayController: NSObject {
             mode = .frozen
             showOverlay(widthPx: cap.widthPx, heightPx: cap.heightPx)
             canvas.resetCamera() // screenshot fills the screen exactly at 1:1
+            if cap.looksBlack { toast.show("Couldn't capture this screen (DRM-protected?)", duration: 4) }
 
             // Encode the dataURL for saving off the main thread — it isn't needed to display.
             DispatchQueue.global(qos: .utility).async { [weak canvas] in
@@ -207,11 +217,11 @@ final class OverlayController: NSObject {
 
     private func handleToolbarAction(_ name: String) {
         switch name {
-        case "new": startWhiteboard()
-        case "recenter": canvas.recenter()
+        case "new": startWhiteboard(); toast.show("New whiteboard")
+        case "recenter": canvas.recenter(); toast.show("Recentered to 100%")
         case "copy": copyToClipboard()
         case "save": saveNow()
-        case "close": dismiss()
+        case "close": toast.show("Closing…", duration: 0.6); dismiss()
         default: break
         }
     }
@@ -219,16 +229,24 @@ final class OverlayController: NSObject {
     private func copyToClipboard() {
         canvas.commitTextEditing()
         guard let png = ExcalidrawIO.exportPNG(canvas.scene, images: canvas.images),
-              let image = NSImage(data: png) else { return }
+              let image = NSImage(data: png) else { toast.show("Nothing to copy"); return }
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.writeObjects([image])
-        dismiss()
+        // Show the confirmation briefly, then close so the user sees it worked.
+        toast.show("Copied to clipboard ✓", duration: 0.9)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in self?.dismiss() }
+        return
     }
 
     private func saveNow() {
         canvas.commitTextEditing()
-        saveDocument(includePNG: true)
+        if hasUserContent() {
+            saveDocument(includePNG: true)
+            toast.show("Saved to \(SettingsStore.resolvedSaveDir())", duration: 2.4)
+        } else {
+            toast.show("Nothing to save yet")
+        }
     }
 
     // MARK: - Theme / settings
